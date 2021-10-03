@@ -1,0 +1,3 @@
+*.caffemodel
+__pycache__
+*.pth

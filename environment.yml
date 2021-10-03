@@ -1,7 +1,18 @@
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
   - defaults
+  - anaconda
 
 dependencies:
   - cmake
   - opencv
+  - torchvision
+  - torchaudio
+  - cudatoolkit=11.1
+  - cudatoolkit-dev=11.1
+  - cudnn=8.2.1 # CUDA 11.3
+  - scikit-image
+  - scikit-learn
+  - numpy

@@ -5,7 +5,9 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "/home/mechsoft/miniconda3/envs/colorize_deps/include/opencv4/**",
-                "${workspaceFolder}/../NumCpp/include"
+                "${workspaceFolder}/../NumCpp/include",
+                "${workspaceFolder}/../libtorch/include",
+                "${workspaceFolder}/../libtorch/include/torch/csrc/api/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",
