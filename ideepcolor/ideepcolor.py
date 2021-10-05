@@ -5,10 +5,9 @@ from skimage import color
 from data import colorize_image as CI
 
 color_model = './models/pytorch/caffemodel.pth'
-test_image = './imgs/CTX1_full.jpg'
+rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_925m-E-056_N-02.tif'
+test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif'
 gpu_id = None
-load_size = 128
-half_load_size = int(load_size / 2)
 
 class ColorPoint:
     def __init__(self, pnt, color, width):
@@ -16,24 +15,24 @@ class ColorPoint:
         self.color = color
         self.width = width
 
-        if self.pnt[0] - width < 0:
-            self.pnt[0] -= self.pnt[0] - width
-        if self.pnt[1] - width < 0:
-            self.pnt[1] -= self.pnt[1] - width
+#        if self.pnt[0] - width < 0:
+#            self.pnt[0] -= self.pnt[0] - width
+#        if self.pnt[1] - width < 0:
+#            self.pnt[1] -= self.pnt[1] - width
 
-        if self.pnt[0] + width >= load_size:
-            self.pnt[0] += self.pnt[0] - load_size
-        if self.pnt[1] + width >= load_size:
-            self.pnt[1] += self.pnt[1] - load_size
+#        if self.pnt[0] + width >= load_size:
+#            self.pnt[0] += self.pnt[0] - load_size
+#        if self.pnt[1] + width >= load_size:
+#            self.pnt[1] += self.pnt[1] - load_size
 
         self.scale = 1.
 
     def render(self, im, mask):
         w = int(self.width / self.scale)
         pnt = self.pnt
-        x1, y1 = pnt[0]-w, pnt[1]-w
+        x1, y1 = self.pnt[0], self.pnt[1]
         tl = (x1, y1)
-        x2, y2 = pnt[0]+w, pnt[1]+w
+        x2, y2 = self.pnt[0]+w, self.pnt[1]+w
         br = (x2, y2)
         cv2.rectangle(mask, tl, br, self.color, -1)
         cv2.rectangle(im, tl, br, self.color, -1)
@@ -127,20 +126,30 @@ class Draw:
         if not os.path.exists(save_path):
             os.mkdir(save_path)
 
-        np.save(os.path.join(save_path, 'im_l.npy'), self.model.img_l)
-        np.save(os.path.join(save_path, 'im_ab.npy'), self.im_ab0)
-        np.save(os.path.join(save_path, 'im_mask.npy'), self.im_mask0)
+        #np.save(os.path.join(save_path, 'im_l.npy'), self.model.img_l)
+        #np.save(os.path.join(save_path, 'im_ab.npy'), self.im_ab0)
+        #np.save(os.path.join(save_path, 'im_mask.npy'), self.im_mask0)
 
-        result_bgr = cv2.cvtColor(self.result, cv2.COLOR_RGB2BGR)
-        mask = self.im_mask0.transpose((1, 2, 0)).astype(np.uint8) * 255
-        cv2.imwrite(os.path.join(save_path, 'input_mask.png'), mask)
-        cv2.imwrite(os.path.join(save_path, 'ours.png'), result_bgr)
+        #result_bgr = cv2.cvtColor(self.result, cv2.COLOR_RGB2BGR)
+        #mask = self.im_mask0.transpose((1, 2, 0)).astype(np.uint8) * 255
+        #cv2.imwrite(os.path.join(save_path, 'input_mask.png'), mask)
+        #cv2.imwrite(os.path.join(save_path, 'ours.png'), result_bgr)
         cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), self.model.get_img_fullres()[:, :, ::-1])
-        cv2.imwrite(os.path.join(save_path, 'input_fullres.png'), self.model.get_input_img_fullres()[:, :, ::-1])
-        cv2.imwrite(os.path.join(save_path, 'input.png'), self.model.get_input_img()[:, :, ::-1])
+        #cv2.imwrite(os.path.join(save_path, 'input_fullres.png'), self.model.get_input_img_fullres()[:, :, ::-1])
+        #cv2.imwrite(os.path.join(save_path, 'input.png'), self.model.get_input_img()[:, :, ::-1])
         cv2.imwrite(os.path.join(save_path, 'input_ab.png'), self.model.get_sup_img()[:, :, ::-1])
 
 ############### SETUP ###############
+
+print(f'Loading RGB {test_image}')
+rgb = cv2.imread(rgb_image)
+h, w, c = rgb.shape
+if w != h:
+	raise Exception('w != h')
+load_size = h
+half_load_size = int(load_size / 2)
+print(f'File is {rgb.shape}')
+print('')
 
 print('Creating networks...')
 colorModel = CI.ColorizeImageTorch(Xd=load_size)
@@ -151,44 +160,14 @@ distModel = CI.ColorizeImageTorchDist(Xd=load_size)
 distModel.prep_net(path=color_model, gpu_id=gpu_id, dist=True)
 print('')
 
-print(f'Loading {test_image}')
+print(f'Loading grayscale {test_image}')
 draw = Draw(colorModel, distModel, load_size)
 draw.read_image(test_image)
 print('')
 
-print('Predicting color')
-draw.predict_color()
+print('Overlaying RGB')
+for y in range(h):
+	for x in range(w):
+		draw.add_point(ColorPoint([x, y], (int(rgb[y, x, 2]), int(rgb[y, x, 1]), int(rgb[y, x, 0])), 1))
 draw.save_result()
-print('')
 
-brush_width = 1
-
-print('Adding a green point to the top left')
-draw.add_point(ColorPoint([0, 0], (0, 255, 0), brush_width))
-draw.predict_color()
-draw.save_result()
-print('')
-
-print('Adding a red point to the top right')
-draw.add_point(ColorPoint([load_size - 1, 0], (255, 0, 0), brush_width))
-draw.predict_color()
-draw.save_result()
-print('')
-
-print('Adding a blue point to the bottom right')
-draw.add_point(ColorPoint([load_size - 3, load_size - 3], (0, 0, 255), brush_width))
-draw.predict_color()
-draw.save_result()
-print('')
-
-print('Adding a red point to the bottom left')
-draw.add_point(ColorPoint([0, load_size - 1], (255, 0, 0), brush_width))
-draw.predict_color()
-draw.save_result()
-print('')
-
-print('Adding a gray point to the middle')
-draw.add_point(ColorPoint([half_load_size, half_load_size], (127, 127, 127), 3))
-draw.predict_color()
-draw.save_result()
-print('')
