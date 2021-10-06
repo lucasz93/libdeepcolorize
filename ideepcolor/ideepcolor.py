@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 import os, sys
-from skimage import color
 from data import colorize_image as CI
 
 color_model = './models/pytorch/caffemodel.pth'
@@ -56,7 +55,7 @@ class Draw:
         im_bgr = cv2.imread(image_file)
         im_bgr = cv2.resize(im_bgr, (self.load_size, self.load_size), interpolation=cv2.INTER_CUBIC)
 
-        self.im_lab = color.rgb2lab(im_bgr[:, :, ::-1])
+        self.im_lab = np.float64(cv2.cvtColor(im_bgr[:, :, ::-1], cv2.COLOR_RGB2LAB)) / 255.
         self.im_l = self.im_lab[:, :, 0]
         self.im_ab = self.im_lab[:, :, 1:]
         self.im_size = im_bgr.shape[0:2]
@@ -82,13 +81,13 @@ class Draw:
         im, mask = self.get_input()
         im_mask0 = mask > 0.0
         self.im_mask0 = im_mask0.transpose((2, 0, 1))
-        im_lab = color.rgb2lab(im).transpose((2, 0, 1))
+        im_lab = CI.rgb2lab_transpose(im)
         self.im_ab0 = im_lab[1:3, :, :]
 
         self.model.net_forward(self.im_ab0, self.im_mask0)
         ab = self.model.output_ab.transpose((1, 2, 0))
         pred_lab = np.concatenate((self.im_l[..., np.newaxis], ab), axis=2)
-        pred_rgb = (np.clip(color.lab2rgb(pred_lab), 0, 1) * 255).astype('uint8')
+        pred_rgb = cv2.cvtColor(np.float32(pred_lab) * 255., cv2.COLOR_RGB2LAB).astype('uint8')
         self.result = pred_rgb
 
     def save_result(self):

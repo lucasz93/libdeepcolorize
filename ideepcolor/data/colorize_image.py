@@ -3,26 +3,19 @@ import cv2
 import matplotlib.pyplot as plt
 import os
 from scipy.ndimage.interpolation import zoom
-from skimage import color
-
-def create_temp_directory(path_template, N=1e8):
-    print(path_template)
-    cur_path = path_template % np.random.randint(0, N)
-    while(os.path.exists(cur_path)):
-        cur_path = path_template % np.random.randint(0, N)
-    print('Creating directory: %s' % cur_path)
-    os.mkdir(cur_path)
-    return cur_path
 
 def lab2rgb_transpose(img_l, img_ab):
     ''' INPUTS
-            img_l     1xXxX     [0,100]
-            img_ab     2xXxX     [-100,100]
+            img_l     1xXxX
+            img_ab    2xXxX
         OUTPUTS
             returned value is XxXx3 '''
-    pred_lab = np.concatenate((img_l, img_ab), axis=0).transpose((1, 2, 0))
-    pred_rgb = (np.clip(color.lab2rgb(pred_lab), 0, 1) * 255).astype('uint8')
-    return pred_rgb
+    l = np.float32(img_l[0,:,:])
+    a = np.float32(img_ab[0,:,:])
+    b = np.float32(img_ab[1,:,:])
+    pred_lab = cv2.merge((l, a, b))
+    
+    return (cv2.cvtColor(pred_lab, cv2.COLOR_LAB2RGB) * 255.).astype('uint8')
 
 
 def rgb2lab_transpose(img_rgb):
@@ -30,7 +23,12 @@ def rgb2lab_transpose(img_rgb):
             img_rgb XxXx3
         OUTPUTS
             returned value is 3xXxX '''
-    return color.rgb2lab(img_rgb).transpose((2, 0, 1))
+    lab = cv2.cvtColor(img_rgb.astype(np.float32) / 255., cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    l = np.float64(l)
+    a = np.float64(a)
+    b = np.float64(b)    
+    return np.stack((l, a, b))
 
 
 class ColorizeImageBase():
@@ -86,9 +84,21 @@ class ColorizeImageBase():
         # Typically, this means that set_image() and net_forward()
         # have been called.
         # bilinear upsample
+
+        print('START SLOW POINT A')
+        #
+        # TODO: Build OpenCV with CUDA support - https://gist.github.com/raulqf/f42c718a658cddc16f9df07ecc627be7
+        #
         zoom_factor = (1, 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1], 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2])
         output_ab_fullres = zoom(self.output_ab, zoom_factor, order=1)
-
+        
+        #size = (int(self.output_ab.shape[1] * 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2]))
+        #gpu_ab, output_ab_fullres = cv2.cuda_GpuMat(), cv2.mat()
+        #gpu_ab.upload(np.float32(self.output_ab))
+        #cv2.cuda.resize(gpu_ab, size).download(output_ab_fullres)
+        
+        print('END SLOW POINT A')
+        
         return lab2rgb_transpose(self.img_l_fullres, output_ab_fullres)
 
     def get_sup_img(self):
@@ -181,16 +191,10 @@ class ColorizeImageTorch(ColorizeImageBase):
 
         if ColorizeImageBase.net_forward(self, input_ab, input_mask) == -1:
             return -1
-
-        # net_input_prepped = np.concatenate((self.img_l_mc, self.input_ab_mc, self.input_mask_mult), axis=0)
-
-        # return prediction
-        # self.net.blobs['data_l_ab_mask'].data[...] = net_input_prepped
-        # embed()
+            
+        # FIXME: This seems terribly wasteful. Converts AB -> RGB -> AB
         output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
-        self.output_rgb = lab2rgb_transpose(self.img_l, output_ab)
-        # self.output_rgb = lab2rgb_transpose(self.img_l, self.net.blobs[self.pred_ab_layer].data[0, :, :, :])
-
+        self.output_rgb = lab2rgb_transpose(self.img_l, output_ab)        
         self._set_out_ab_()
         return self.output_rgb
 
