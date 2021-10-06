@@ -46,19 +46,14 @@ class ColorizeImageBase():
     def load_image(self, input_path):
         # rgb image [CxXdxXd]
         im = cv2.cvtColor(cv2.imread(input_path, 1), cv2.COLOR_BGR2RGB)
+        self.set_image(im)
+
+    def set_image(self, im):
         self._set_img_lab_fullres_(im)
 
         # convert into lab space
         im = cv2.resize(im, (self.Xd, self.Xd))
         self._set_img_lab_(im)
-        self._set_img_lab_mc_()
-
-    def set_image(self, input_image):
-        self._set_img_lab_fullres_(input_image)
-
-        # convert into lab space
-        self._set_img_lab_(input_image)
-        self._set_img_lab_mc_()
 
     def net_forward(self, input_ab, input_mask):
         # INPUTS
@@ -86,12 +81,12 @@ class ColorizeImageBase():
         # bilinear upsample
 
         print('START SLOW POINT A')
-        #
-        # TODO: Build OpenCV with CUDA support - https://gist.github.com/raulqf/f42c718a658cddc16f9df07ecc627be7
-        #
         zoom_factor = (1, 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1], 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2])
         output_ab_fullres = zoom(self.output_ab, zoom_factor, order=1)
         
+        #
+        # TODO: Build OpenCV with CUDA support - https://gist.github.com/raulqf/f42c718a658cddc16f9df07ecc627be7
+        #
         #size = (int(self.output_ab.shape[1] * 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2]))
         #gpu_ab, output_ab_fullres = cv2.cuda_GpuMat(), cv2.mat()
         #gpu_ab.upload(np.float32(self.output_ab))
@@ -115,24 +110,14 @@ class ColorizeImageBase():
         self.img_lab = rgb2lab_transpose(img_rgb)
         self.img_l = self.img_lab[[0], :, :]
         self.img_ab = self.img_lab[1:, :, :]
-
-    def _set_img_lab_mc_(self):
+        
         # set self.img_lab_mc from self.img_lab
         # lab image, mean centered [XxYxX]
         self.img_lab_mc = self.img_lab / np.array((self.l_norm, self.ab_norm, self.ab_norm))[:, np.newaxis, np.newaxis] - np.array(
             (self.l_mean / self.l_norm, self.ab_mean / self.ab_norm, self.ab_mean / self.ab_norm))[:, np.newaxis, np.newaxis]
-        self._set_img_l_()
-
-    def _set_img_l_(self):
+            
         self.img_l_mc = self.img_lab_mc[[0], :, :]
         self.img_l_set = True
-
-    def _set_img_ab_(self):
-        self.img_ab_mc = self.img_lab_mc[[1, 2], :, :]
-
-    def _set_out_ab_(self):
-        self.output_lab = rgb2lab_transpose(self.output_rgb)
-        self.output_ab = self.output_lab[1:, :, :]
 
 
 class ColorizeImageTorch(ColorizeImageBase):
@@ -146,41 +131,20 @@ class ColorizeImageTorch(ColorizeImageBase):
         self.mask_mult = 1.
         self.mask_cent = .5 if maskcent else 0
 
-        # Load grid properties
-        self.pts_in_hull = np.array(np.meshgrid(np.arange(-110, 120, 10), np.arange(-110, 120, 10))).reshape((2, 529)).T
-
     # ***** Net preparation *****
     def prep_net(self, gpu_id=None, path='', dist=False):
         import torch
         import models.pytorch.model as model
-        print('path = %s' % path)
-        print('Model set! dist mode? ', dist)
         self.net = model.SIGGRAPHGenerator(dist=dist)
         state_dict = torch.load(path)
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
 
-        # patch InstanceNorm checkpoints prior to 0.4
-        for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
-            self.__patch_instance_norm_state_dict(state_dict, self.net, key.split('.'))
         self.net.load_state_dict(state_dict)
         if gpu_id != None:
             self.net.cuda()
         self.net.eval()
         self.net_set = True
-
-    def __patch_instance_norm_state_dict(self, state_dict, module, keys, i=0):
-        key = keys[i]
-        if i + 1 == len(keys):  # at the end, pointing to a parameter/buffer
-            if module.__class__.__name__.startswith('InstanceNorm') and \
-                    (key == 'running_mean' or key == 'running_var'):
-                if getattr(module, key) is None:
-                    state_dict.pop('.'.join(keys))
-            if module.__class__.__name__.startswith('InstanceNorm') and \
-               (key == 'num_batches_tracked'):
-                state_dict.pop('.'.join(keys))
-        else:
-            self.__patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
 
     # ***** Call forward *****
     def net_forward(self, input_ab, input_mask):
@@ -192,10 +156,7 @@ class ColorizeImageTorch(ColorizeImageBase):
         if ColorizeImageBase.net_forward(self, input_ab, input_mask) == -1:
             return -1
             
-        # FIXME: This seems terribly wasteful. Converts AB -> RGB -> AB
-        output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
-        self.output_rgb = lab2rgb_transpose(self.img_l, output_ab)        
-        self._set_out_ab_()
-        return self.output_rgb
+        self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
+        return 0
 
 

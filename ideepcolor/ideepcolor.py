@@ -14,20 +14,8 @@ class ColorPoint:
         self.color = color
         self.width = width
 
-#        if self.pnt[0] - width < 0:
-#            self.pnt[0] -= self.pnt[0] - width
-#        if self.pnt[1] - width < 0:
-#            self.pnt[1] -= self.pnt[1] - width
-
-#        if self.pnt[0] + width >= load_size:
-#            self.pnt[0] += self.pnt[0] - load_size
-#        if self.pnt[1] + width >= load_size:
-#            self.pnt[1] += self.pnt[1] - load_size
-
-        self.scale = 1.
-
     def render(self, im, mask):
-        w = int(self.width / self.scale)
+        w = self.width
         pnt = self.pnt
         x1, y1 = self.pnt[0], self.pnt[1]
         tl = (x1, y1)
@@ -42,7 +30,6 @@ class Draw:
         self.load_size = load_size
         self.points = []
 
-        self.scale = 1.
         self.suffix = 0
 
     def add_point(self, point):
@@ -51,18 +38,9 @@ class Draw:
     def read_image(self, image_file):
         self.image_loaded = True
         self.image_file = image_file
-        print(image_file)
-        im_bgr = cv2.imread(image_file)
-        im_bgr = cv2.resize(im_bgr, (self.load_size, self.load_size), interpolation=cv2.INTER_CUBIC)
-
-        self.im_lab = np.float64(cv2.cvtColor(im_bgr[:, :, ::-1], cv2.COLOR_RGB2LAB)) / 255.
-        self.im_l = self.im_lab[:, :, 0]
-        self.im_ab = self.im_lab[:, :, 1:]
-        self.im_size = im_bgr.shape[0:2]
 
         self.im_ab0 = np.zeros((2, self.load_size, self.load_size))
         self.im_mask0 = np.zeros((1, self.load_size, self.load_size))
-        self.brushWidth = 2 * self.scale
 
         self.model.load_image(image_file)
 
@@ -85,10 +63,6 @@ class Draw:
         self.im_ab0 = im_lab[1:3, :, :]
 
         self.model.net_forward(self.im_ab0, self.im_mask0)
-        ab = self.model.output_ab.transpose((1, 2, 0))
-        pred_lab = np.concatenate((self.im_l[..., np.newaxis], ab), axis=2)
-        pred_rgb = cv2.cvtColor(np.float32(pred_lab) * 255., cv2.COLOR_RGB2LAB).astype('uint8')
-        self.result = pred_rgb
 
     def save_result(self):
         path = os.path.abspath(self.image_file)
@@ -107,13 +81,12 @@ class Draw:
 ############### SETUP ###############
 
 print(f'Loading RGB {test_image}')
-rgb = cv2.imread(rgb_image)
+rgb = cv2.imread(rgb_image).astype(int)
 h, w, c = rgb.shape
 if w != h:
-	raise Exception('w != h')
+    raise Exception('w != h')
 load_size = h
 half_load_size = int(load_size / 2)
-print(f'File is {rgb.shape}')
 print('')
 
 print('Creating networks...')
@@ -128,8 +101,8 @@ print('')
 
 print('Overlaying RGB')
 for y in range(h):
-	for x in range(w):
-		draw.add_point(ColorPoint([x, y], (int(rgb[y, x, 2]), int(rgb[y, x, 1]), int(rgb[y, x, 0])), 1))
+    for x in range(w):
+        draw.add_point(ColorPoint([x, y], (int(rgb[y, x, 2]), int(rgb[y, x, 1]), int(rgb[y, x, 0])), 1))
 print('')
 
 print('Computing...')
