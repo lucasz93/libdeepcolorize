@@ -57,7 +57,7 @@ class ColorizeImageBase():
 
     def net_forward(self, input_ab, input_mask):
         # INPUTS
-        #     ab         2xXxX     input color patches (non-normalized)
+        #     ab       2xXxX    input color patches (non-normalized)
         #     mask     1xXxX    input mask, indicating which points have been provided
         # assumes self.img_l_mc has been set
 
@@ -79,22 +79,21 @@ class ColorizeImageBase():
         # Typically, this means that set_image() and net_forward()
         # have been called.
         # bilinear upsample
+        
+        a = self.output_ab[0, :, :]
+        b = self.output_ab[1, :, :]
+        
+        gpu_a = cv2.cuda_GpuMat(a)
+        gpu_b = cv2.cuda_GpuMat(b)
 
-        print('START SLOW POINT A')
-        zoom_factor = (1, 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1], 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2])
-        output_ab_fullres = zoom(self.output_ab, zoom_factor, order=1)
+        output_a_fullres = np.float32(np.zeros((self.img_l_fullres.shape[2], self.img_l_fullres.shape[1])))
+        output_b_fullres = np.float32(np.zeros((self.img_l_fullres.shape[2], self.img_l_fullres.shape[1])))
         
-        #
-        # TODO: Build OpenCV with CUDA support - https://gist.github.com/raulqf/f42c718a658cddc16f9df07ecc627be7
-        #
-        #size = (int(self.output_ab.shape[1] * 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2]))
-        #gpu_ab, output_ab_fullres = cv2.cuda_GpuMat(), cv2.mat()
-        #gpu_ab.upload(np.float32(self.output_ab))
-        #cv2.cuda.resize(gpu_ab, size).download(output_ab_fullres)
-        
-        print('END SLOW POINT A')
-        
-        return lab2rgb_transpose(self.img_l_fullres, output_ab_fullres)
+        size = (int(self.output_ab.shape[1] * 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2]))
+        cv2.cuda.resize(gpu_a, size, interpolation=cv2.INTER_CUBIC).download(output_a_fullres)
+        cv2.cuda.resize(gpu_b, size, interpolation=cv2.INTER_CUBIC).download(output_b_fullres)
+
+        return lab2rgb_transpose(self.img_l_fullres, np.stack((output_a_fullres, output_b_fullres)))
 
     def get_sup_img(self):
         return lab2rgb_transpose(50 * self.input_mask, self.input_ab)
