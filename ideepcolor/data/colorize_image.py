@@ -4,18 +4,24 @@ import matplotlib.pyplot as plt
 import os
 from scipy.ndimage.interpolation import zoom
 
-def lab2rgb_transpose(img_l, img_ab):
+def lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
     ''' INPUTS
             img_l     1xXxX
             img_ab    2xXxX
         OUTPUTS
             returned value is XxXx3 '''
-    l = np.float32(img_l[0,:,:])
-    a = np.float32(img_ab[0,:,:])
-    b = np.float32(img_ab[1,:,:])
-    pred_lab = cv2.merge((l, a, b))
+    # Allocate output memory for the merge...otherwise OpenCV downloads it to the CPU.
+    gpu_pred_lab = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
+    cv2.cuda.merge((gpu_img_l, gpu_img_a, gpu_img_b), gpu_pred_lab)
+
+    # Convert to RGB.
+    gpu_rgb = cv2.cuda.cvtColor(gpu_pred_lab, cv2.COLOR_LAB2RGB)
+
+    # Scale into [0..255].
+    gpu_byte_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_8UC3)
+    gpu_rgb.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
     
-    return (cv2.cvtColor(pred_lab, cv2.COLOR_LAB2RGB) * 255.).astype('uint8')
+    return gpu_byte_rgb.download()
 
 
 def rgb2lab_transpose(img_rgb):
@@ -68,9 +74,7 @@ class ColorizeImageBase():
             print('I need to have a net!')
             return -1
 
-        self.input_ab = input_ab
         self.input_ab_mc = (input_ab - self.ab_mean) / self.ab_norm
-        self.input_mask = input_mask
         self.input_mask_mult = input_mask * self.mask_mult
         return 0
 
@@ -83,39 +87,36 @@ class ColorizeImageBase():
         a = self.output_ab[0, :, :]
         b = self.output_ab[1, :, :]
         
-        gpu_a = cv2.cuda_GpuMat(a)
-        gpu_b = cv2.cuda_GpuMat(b)
+        size = (int(self.output_ab.shape[1] * 1. * self.gpu_img_l_fullres_shape[0] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.gpu_img_l_fullres_shape[1] / self.output_ab.shape[2]))
+        gpu_a_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(a), size, interpolation=cv2.INTER_CUBIC)
+        gpu_b_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(b), size, interpolation=cv2.INTER_CUBIC)
 
-        output_a_fullres = np.float32(np.zeros((self.img_l_fullres.shape[2], self.img_l_fullres.shape[1])))
-        output_b_fullres = np.float32(np.zeros((self.img_l_fullres.shape[2], self.img_l_fullres.shape[1])))
-        
-        size = (int(self.output_ab.shape[1] * 1. * self.img_l_fullres.shape[1] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.img_l_fullres.shape[2] / self.output_ab.shape[2]))
-        cv2.cuda.resize(gpu_a, size, interpolation=cv2.INTER_CUBIC).download(output_a_fullres)
-        cv2.cuda.resize(gpu_b, size, interpolation=cv2.INTER_CUBIC).download(output_b_fullres)
-
-        return lab2rgb_transpose(self.img_l_fullres, np.stack((output_a_fullres, output_b_fullres)))
-
-    def get_sup_img(self):
-        return lab2rgb_transpose(50 * self.input_mask, self.input_ab)
+        return lab2rgb_transpose(self.gpu_img_l_fullres_shape, self.gpu_img_l_fullres, gpu_a_fullsize, gpu_b_fullsize)
 
     # ***** Private functions *****
     def _set_img_lab_fullres_(self, img_rgb_fullres):
         img_lab_fullres = rgb2lab_transpose(img_rgb_fullres)
-        self.img_l_fullres = img_lab_fullres[[0], :, :]
-        self.img_ab_fullres = img_lab_fullres[1:, :, :]
+        img_l_fullres = img_lab_fullres[0, :, :]
+        self.gpu_img_l_fullres_shape = img_l_fullres.shape
+        self.gpu_img_l_fullres = cv2.cuda_GpuMat(np.float32(img_l_fullres))
+
+        # Unused.
+        #self.img_ab_fullres = img_lab_fullres[1:, :, :]
 
     def _set_img_lab_(self, img_rgb):
-        # set self.img_lab from self.im_rgb
-        self.img_lab = rgb2lab_transpose(img_rgb)
-        self.img_l = self.img_lab[[0], :, :]
-        self.img_ab = self.img_lab[1:, :, :]
-        
-        # set self.img_lab_mc from self.img_lab
+        # set img_lab from self.im_rgb
+        img_lab = rgb2lab_transpose(img_rgb)
+
+        # Unused.
+        #self.img_l = img_lab[[0], :, :]
+        #self.img_ab = img_lab[1:, :, :]
+
+        # set img_lab_mc from img_lab
         # lab image, mean centered [XxYxX]
-        self.img_lab_mc = self.img_lab / np.array((self.l_norm, self.ab_norm, self.ab_norm))[:, np.newaxis, np.newaxis] - np.array(
+        img_lab_mc = img_lab / np.array((self.l_norm, self.ab_norm, self.ab_norm))[:, np.newaxis, np.newaxis] - np.array(
             (self.l_mean / self.l_norm, self.ab_mean / self.ab_norm, self.ab_mean / self.ab_norm))[:, np.newaxis, np.newaxis]
-            
-        self.img_l_mc = self.img_lab_mc[[0], :, :]
+
+        self.img_l_mc = img_lab_mc[[0], :, :]
         self.img_l_set = True
 
 

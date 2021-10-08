@@ -76,7 +76,6 @@ class Draw:
             os.mkdir(save_path)
 
         cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), self.model.get_img_fullres()[:, :, ::-1])
-        cv2.imwrite(os.path.join(save_path, 'input_ab.png'), self.model.get_sup_img()[:, :, ::-1])
 
 ############### SETUP ###############
 
