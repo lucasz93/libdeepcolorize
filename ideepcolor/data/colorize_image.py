@@ -18,10 +18,12 @@ def cuda_lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
     # Convert to RGB.
     gpu_float_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
     cv2.cuda.cvtColor(gpu_pred_lab, cv2.COLOR_LAB2RGB, gpu_float_rgb)
+    del gpu_pred_lab
 
     # Scale into [0..255].
     gpu_byte_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_8UC3)
     gpu_float_rgb.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
+    del gpu_float_rgb
     
     return gpu_byte_rgb.download()
 
@@ -50,6 +52,7 @@ def cuda_rgb2l(shape, gpu_img_rgb):
     # Convert to LAB
     gpu_lab = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
     cv2.cuda.cvtColor(gpu_float_rgb, cv2.COLOR_RGB2LAB, gpu_lab)
+    del gpu_float_rgb
 
     # Extract the L component.
     gpu_l = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC1)
