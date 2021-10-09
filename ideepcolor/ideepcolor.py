@@ -1,12 +1,12 @@
 import numpy as np
 import cv2
-import os, sys
+import os, sys, time
 from data import colorize_image as CI
 
 color_model = './models/pytorch/caffemodel.pth'
 rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_925m-E-056_N-02.tif'
 test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif'
-gpu_id = None
+gpu_id = 0
 
 class ColorPoint:
     def __init__(self, pnt, color, width):
@@ -64,6 +64,9 @@ class Draw:
 
         self.model.net_forward(self.im_ab0, self.im_mask0)
 
+    def render(self):
+        self.result = self.model.get_img_fullres()[:, :, ::-1]
+
     def save_result(self):
         path = os.path.abspath(self.image_file)
         path, ext = os.path.splitext(path)
@@ -71,45 +74,62 @@ class Draw:
         save_path = "_".join([path, str(self.suffix)])
         self.suffix += 1
 
-        print('  Generating full size RGB')
-        img = self.model.get_img_fullres()[:, :, ::-1]
-
-        print('  saving result to <%s>\n' % save_path)
+        #print('  saving result to <%s>\n' % save_path)
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-        cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), img)
+        cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), self.result)
 
 ############### SETUP ###############
 
+cv2.cuda.setDevice(gpu_id)
+
 print(f'Loading RGB {test_image}')
+start = time.perf_counter()
 rgb = cv2.imread(rgb_image).astype(int)
 h, w, c = rgb.shape
 if w != h:
     raise Exception('w != h')
 load_size = h
 half_load_size = int(load_size / 2)
-print('')
+print(f'Took {time.perf_counter() - start} seconds\n')
 
 print('Creating networks...')
-colorModel = CI.ColorizeImageTorch(Xd=load_size)
-colorModel.prep_net(path=color_model, gpu_id=gpu_id)
-print('')
+start = time.perf_counter()
+colorModel = CI.ColorizeImageTorch(gpu_id, Xd=load_size)
+colorModel.prep_net(path=color_model)
+print(f'Took {time.perf_counter() - start} seconds\n')
 
 print(f'Loading grayscale {test_image}')
+start = time.perf_counter()
 draw = Draw(colorModel, load_size)
 draw.read_image(test_image)
-print('')
+print(f'Took {time.perf_counter() - start} seconds\n')
 
+# TODO: Replace this with 'draw.setRGB', or something like that.
 print('Overlaying RGB')
+start = time.perf_counter()
 for y in range(h):
     for x in range(w):
         draw.add_point(ColorPoint([x, y], (int(rgb[y, x, 2]), int(rgb[y, x, 1]), int(rgb[y, x, 0])), 1))
-print('')
+print(f'Took {time.perf_counter() - start} seconds\n')
 
-print('Computing...')
+print('Computing (cold)...')
+start = time.perf_counter()
 draw.compute_result()
-print('')
+print(f'Took {time.perf_counter() - start} seconds\n')
+
+print('Computing (warm)...')
+start = time.perf_counter()
+draw.compute_result()
+print(f'Took {time.perf_counter() - start} seconds\n')
+
+print('Rendering...')
+start = time.perf_counter()
+draw.render()
+print(f'Took {time.perf_counter() - start} seconds\n')
 
 print('Saving...')
+start = time.perf_counter()
 draw.save_result()
+print(f'Took {time.perf_counter() - start} seconds\n')
 

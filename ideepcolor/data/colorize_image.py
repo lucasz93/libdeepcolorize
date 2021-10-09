@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import os
+import torch
 from scipy.ndimage.interpolation import zoom
 
 def cuda_lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
@@ -108,6 +109,7 @@ class ColorizeImageBase():
         b = self.output_ab[1, :, :]
         
         size = (int(self.output_ab.shape[1] * 1. * self.gpu_img_l_fullres_shape[0] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.gpu_img_l_fullres_shape[1] / self.output_ab.shape[2]))
+ 
         gpu_a_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(a), size, interpolation=cv2.INTER_CUBIC)
         gpu_b_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(b), size, interpolation=cv2.INTER_CUBIC)
 
@@ -132,41 +134,49 @@ class ColorizeImageBase():
 
 
 class ColorizeImageTorch(ColorizeImageBase):
-    def __init__(self, Xd=256, maskcent=False):
+    def __init__(self, gpu_id, Xd=256, maskcent=False):
         print('ColorizeImageTorch instantiated')
         ColorizeImageBase.__init__(self, Xd)
+        self.gpu_id = gpu_id
         self.l_norm = 1.
         self.ab_norm = 1.
         self.l_mean = 50.
         self.ab_mean = 0.
         self.mask_mult = 1.
         self.mask_cent = .5 if maskcent else 0
+        
+        cv2.cuda.setDevice(gpu_id)
+        torch.cuda.set_device(gpu_id)
 
     # ***** Net preparation *****
-    def prep_net(self, gpu_id=None, path='', dist=False):
+    def prep_net(self, path='', dist=False):
         import torch
         import models.pytorch.model as model
-        self.net = model.SIGGRAPHGenerator(dist=dist)
+        self.net = model.SIGGRAPHGenerator(self.gpu_id, dist)
         state_dict = torch.load(path)
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
 
         self.net.load_state_dict(state_dict)
-        if gpu_id != None:
-            self.net.cuda()
+        if self.gpu_id != None:
+            print(f'Running on CUDA:{self.gpu_id}')
+            self.net.cuda(self.gpu_id)
+        else:
+            print('Running on CPU')
+
         self.net.eval()
         self.net_set = True
 
     # ***** Call forward *****
     def net_forward(self, input_ab, input_mask):
         # INPUTS
-        #     ab         2xXxX     input color patches (non-normalized)
+        #     ab       2xXxX    input color patches (non-normalized)
         #     mask     1xXxX    input mask, indicating which points have been provided
         # assumes self.img_l_mc has been set
 
         if ColorizeImageBase.net_forward(self, input_ab, input_mask) == -1:
             return -1
-            
+
         self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
         return 0
 
