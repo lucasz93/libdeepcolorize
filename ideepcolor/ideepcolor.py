@@ -71,11 +71,13 @@ class Draw:
         save_path = "_".join([path, str(self.suffix)])
         self.suffix += 1
 
-        print('saving result to <%s>\n' % save_path)
+        print('  Generating full size RGB')
+        img = self.model.get_img_fullres()[:, :, ::-1]
+
+        print('  saving result to <%s>\n' % save_path)
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-
-        cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), self.model.get_img_fullres()[:, :, ::-1])
+        cv2.imwrite(os.path.join(save_path, 'ours_fullres.png'), img)
 
 ############### SETUP ###############
 

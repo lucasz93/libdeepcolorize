@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import os
 from scipy.ndimage.interpolation import zoom
 
-def lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
+def cuda_lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
     ''' INPUTS
             img_l     1xXxX
             img_ab    2xXxX
@@ -15,11 +15,12 @@ def lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
     cv2.cuda.merge((gpu_img_l, gpu_img_a, gpu_img_b), gpu_pred_lab)
 
     # Convert to RGB.
-    gpu_rgb = cv2.cuda.cvtColor(gpu_pred_lab, cv2.COLOR_LAB2RGB)
+    gpu_float_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
+    cv2.cuda.cvtColor(gpu_pred_lab, cv2.COLOR_LAB2RGB, gpu_float_rgb)
 
     # Scale into [0..255].
     gpu_byte_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_8UC3)
-    gpu_rgb.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
+    gpu_float_rgb.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
     
     return gpu_byte_rgb.download()
 
@@ -35,6 +36,24 @@ def rgb2lab_transpose(img_rgb):
     a = np.float64(a)
     b = np.float64(b)    
     return np.stack((l, a, b))
+
+def cuda_rgb2l(shape, gpu_img_rgb):
+    ''' INPUTS
+            img_rgb XxYx3   CV_8UC3
+        OUTPUTS
+            returned value is 3xXxY CV_32FC3'''
+    # Scale into [0..1]
+    gpu_float_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
+    gpu_img_rgb.convertTo(gpu_float_rgb.type(), 1. / 255., gpu_float_rgb)
+
+    # Convert to LAB
+    gpu_lab = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
+    cv2.cuda.cvtColor(gpu_float_rgb, cv2.COLOR_RGB2LAB, gpu_lab)
+
+    # Extract the L component.
+    gpu_l = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC1)
+    cv2.cuda.split(gpu_lab, (gpu_l, None, None))
+    return gpu_l
 
 
 class ColorizeImageBase():
@@ -55,7 +74,8 @@ class ColorizeImageBase():
         self.set_image(im)
 
     def set_image(self, im):
-        self._set_img_lab_fullres_(im)
+        gpu_im = cv2.cuda_GpuMat(im)
+        self._set_img_lab_fullres_(im.shape, gpu_im)
 
         # convert into lab space
         im = cv2.resize(im, (self.Xd, self.Xd))
@@ -91,27 +111,18 @@ class ColorizeImageBase():
         gpu_a_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(a), size, interpolation=cv2.INTER_CUBIC)
         gpu_b_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(b), size, interpolation=cv2.INTER_CUBIC)
 
-        return lab2rgb_transpose(self.gpu_img_l_fullres_shape, self.gpu_img_l_fullres, gpu_a_fullsize, gpu_b_fullsize)
+        return cuda_lab2rgb_transpose(self.gpu_img_l_fullres_shape, self.gpu_img_l_fullres, gpu_a_fullsize, gpu_b_fullsize)
 
     # ***** Private functions *****
-    def _set_img_lab_fullres_(self, img_rgb_fullres):
-        img_lab_fullres = rgb2lab_transpose(img_rgb_fullres)
-        img_l_fullres = img_lab_fullres[0, :, :]
-        self.gpu_img_l_fullres_shape = img_l_fullres.shape
-        self.gpu_img_l_fullres = cv2.cuda_GpuMat(np.float32(img_l_fullres))
-
-        # Unused.
-        #self.img_ab_fullres = img_lab_fullres[1:, :, :]
+    def _set_img_lab_fullres_(self, shape, gpu_img_rgb_fullres):
+        # INPUTS
+        #     gpu_img_rgb_fullres    XxYx3    CV_U8C3
+        self.gpu_img_l_fullres_shape = [shape[0], shape[1]]
+        self.gpu_img_l_fullres = cuda_rgb2l(self.gpu_img_l_fullres_shape, gpu_img_rgb_fullres)
 
     def _set_img_lab_(self, img_rgb):
-        # set img_lab from self.im_rgb
         img_lab = rgb2lab_transpose(img_rgb)
 
-        # Unused.
-        #self.img_l = img_lab[[0], :, :]
-        #self.img_ab = img_lab[1:, :, :]
-
-        # set img_lab_mc from img_lab
         # lab image, mean centered [XxYxX]
         img_lab_mc = img_lab / np.array((self.l_norm, self.ab_norm, self.ab_norm))[:, np.newaxis, np.newaxis] - np.array(
             (self.l_mean / self.l_norm, self.ab_mean / self.ab_norm, self.ab_mean / self.ab_norm))[:, np.newaxis, np.newaxis]
