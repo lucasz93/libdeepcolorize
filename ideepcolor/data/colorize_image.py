@@ -1,32 +1,9 @@
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-import os
+import os, time
 import torch
 from scipy.ndimage.interpolation import zoom
-
-def cuda_lab2rgb_transpose(shape, gpu_img_l, gpu_img_a, gpu_img_b):
-    ''' INPUTS
-            img_l     1xXxX
-            img_ab    2xXxX
-        OUTPUTS
-            returned value is XxXx3 '''
-    # Allocate output memory for the merge...otherwise OpenCV downloads it to the CPU.
-    gpu_pred_lab = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
-    cv2.cuda.merge((gpu_img_l, gpu_img_a, gpu_img_b), gpu_pred_lab)
-
-    # Convert to RGB.
-    gpu_float_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
-    cv2.cuda.cvtColor(gpu_pred_lab, cv2.COLOR_LAB2RGB, gpu_float_rgb)
-    del gpu_pred_lab
-
-    # Scale into [0..255].
-    gpu_byte_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_8UC3)
-    gpu_float_rgb.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
-    del gpu_float_rgb
-    
-    return gpu_byte_rgb.download()
-
 
 def rgb2lab_transpose(img_rgb):
     ''' INPUTS
@@ -46,17 +23,15 @@ def cuda_rgb2l(shape, gpu_img_rgb):
         OUTPUTS
             returned value is 3xXxY CV_32FC3'''
     # Scale into [0..1]
-    gpu_float_rgb = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
-    gpu_img_rgb.convertTo(gpu_float_rgb.type(), 1. / 255., gpu_float_rgb)
+    scratch = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
+    gpu_img_rgb.convertTo(scratch.type(), 1. / 255., scratch)
 
     # Convert to LAB
-    gpu_lab = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC3)
-    cv2.cuda.cvtColor(gpu_float_rgb, cv2.COLOR_RGB2LAB, gpu_lab)
-    del gpu_float_rgb
+    cv2.cuda.cvtColor(scratch, cv2.COLOR_RGB2LAB, scratch)
 
     # Extract the L component.
     gpu_l = cv2.cuda_GpuMat(shape[0], shape[1], cv2.CV_32FC1)
-    cv2.cuda.split(gpu_lab, (gpu_l, None, None))
+    cv2.cuda.split(scratch, (gpu_l, None, None))
     return gpu_l
 
 
@@ -111,12 +86,32 @@ class ColorizeImageBase():
         a = self.output_ab[0, :, :]
         b = self.output_ab[1, :, :]
         
-        size = (int(self.output_ab.shape[1] * 1. * self.gpu_img_l_fullres_shape[0] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * self.gpu_img_l_fullres_shape[1] / self.output_ab.shape[2]))
+        full_shape = self.gpu_img_l_fullres_shape
+        size = (int(self.output_ab.shape[1] * 1. * full_shape[0] / self.output_ab.shape[1]), int(self.output_ab.shape[2] * 1. * full_shape[1] / self.output_ab.shape[2]))
  
-        gpu_a_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(a), size, interpolation=cv2.INTER_CUBIC)
-        gpu_b_fullsize = cv2.cuda.resize(cv2.cuda_GpuMat(b), size, interpolation=cv2.INTER_CUBIC)
+        gpu_a_fullsize = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_32FC1)
+        gpu_b_fullsize = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_32FC1)
+        
+        cv2.cuda.resize(cv2.cuda_GpuMat(a), size, gpu_a_fullsize, interpolation=cv2.INTER_CUBIC)
+        cv2.cuda.resize(cv2.cuda_GpuMat(b), size, gpu_b_fullsize, interpolation=cv2.INTER_CUBIC)
 
-        return cuda_lab2rgb_transpose(self.gpu_img_l_fullres_shape, self.gpu_img_l_fullres, gpu_a_fullsize, gpu_b_fullsize)
+        # Allocate output memory for the merge...otherwise OpenCV downloads it to the CPU.
+        # Merge components back together.
+        scratch = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_32FC3)
+        cv2.cuda.merge((self.gpu_img_l_fullres, gpu_a_fullsize, gpu_b_fullsize), scratch)
+        
+        # Don't need these anymore. Keep memory usage down.
+        del gpu_a_fullsize
+        del gpu_b_fullsize
+
+        # Convert to RGB.
+        cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
+
+        # Scale into [0..255].
+        gpu_byte_rgb = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_8UC3)
+        scratch.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
+    
+        return gpu_byte_rgb.download()
 
     # ***** Private functions *****
     def _set_img_lab_fullres_(self, shape, gpu_img_rgb_fullres):
