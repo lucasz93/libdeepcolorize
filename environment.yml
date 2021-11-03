@@ -15,3 +15,5 @@ dependencies:
   - cudnn=8.2.1 # CUDA 11.3
   - scikit-learn
   - numpy
+  - libtiff
+  - pylibtiff

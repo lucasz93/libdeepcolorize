@@ -3,6 +3,7 @@ import cv2
 import matplotlib.pyplot as plt
 import os, time
 import torch
+from libtiff import TIFF
 from scipy.ndimage.interpolation import zoom
 
 def rgb2lab_transpose(img_rgb):
@@ -49,8 +50,12 @@ class ColorizeImageBase():
     # ***** Image prepping *****
     def load_image(self, input_path):
         # rgb image [CxXdxXd]
-        im = cv2.cvtColor(cv2.imread(input_path, 1), cv2.COLOR_BGR2RGB)
-        self.set_image(im)
+        tif = TIFF.open(input_path, mode='r')
+        try:
+            im = cv2.cvtColor(tif.read_image(), cv2.COLOR_GRAY2RGB)
+            self.set_image(im)
+        finally:
+            tif.close()
 
     def set_image(self, im):
         gpu_im = cv2.cuda_GpuMat(im)
@@ -105,7 +110,9 @@ class ColorizeImageBase():
         del gpu_b_fullsize
 
         # Convert to RGB.
-        cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
+        #cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
+        # HACK: libtiff wants BGR
+        cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2BGR, scratch)
 
         # Scale into [0..255].
         gpu_byte_rgb = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_8UC3)
