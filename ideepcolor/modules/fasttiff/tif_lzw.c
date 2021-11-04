@@ -875,6 +875,24 @@ LZWPreEncode(TIFF* tif/*, uint16 s*/)
  * for the decoder. 
  */
 
+static void
+horDiff8(uint8* cp0, tmsize_t cc)
+{
+	char* cp = (char*) cp0;
+
+	cc -= 3;
+	int r1, g1, b1;
+	int r2 = cp[0];
+	int g2 = cp[1];
+	int b2 = cp[2];
+	do {
+		r1 = cp[3]; cp[3] = r1-r2; r2 = r1;
+		g1 = cp[4]; cp[4] = g1-g2; g2 = g1;
+		b1 = cp[5]; cp[5] = b1-b2; b2 = b1;
+		cp += 3;
+	} while ((cc -= 3) > 0);
+}
+
 static int
 LZWEncode(TIFF* tif, uint8* bp, tmsize_t cc/*, uint16 s*/)
 {
@@ -889,6 +907,8 @@ LZWEncode(TIFF* tif, uint8* bp, tmsize_t cc/*, uint16 s*/)
 	int free_ent, maxcode, nbits;
 	uint8* op;
 	uint8* limit;
+	
+	horDiff8(bp, cc);
 
 	//(void) s;
 	if (sp == NULL)

@@ -75,7 +75,7 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
     // This field can only be set after compression and before
 	// writing data. Horizontal predictor often improves compression,
 	// but some rare readers might support LZW only without predictor.
-//	TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+	TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
 	TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
 
 	// Allocate worker threads.
