@@ -110,14 +110,13 @@ class ColorizeImageBase():
         del gpu_b_fullsize
 
         # Convert to RGB.
-        #cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
-        # HACK: libtiff wants BGR
-        cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2BGR, scratch)
+        cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
 
         # Scale into [0..255].
         gpu_byte_rgb = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_8UC3)
         scratch.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
-    
+
+        # Download into a C array.
         return gpu_byte_rgb.download()
 
     # ***** Private functions *****

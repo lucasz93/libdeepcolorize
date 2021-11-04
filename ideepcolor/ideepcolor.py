@@ -1,17 +1,35 @@
 import numpy as np
 import cv2
 import os, sys, time, multiprocessing
+from threading import Thread, Lock
+import multiprocessing
+
 from libtiff import TIFF, tiff_h_4_3_0 as tiff_h
 from libtiff.tif_lzw import encode as lzw_encode
 from data import colorize_image as CI
+import fasttiff
 
 color_model = './models/pytorch/caffemodel.pth'
 rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_925m-E-056_N-02.tif'
 test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif'
 gpu_id = 0
 
-def tif_encode_main(_n, strips, encoded):
-     encoded[_n] = lzw_encode(strips[_n, :, :].ctypes.data)
+def tif_encode_main(start, end, arr, encoded, mutex):
+    print(f'{start} -> {end}')
+
+    for _n in range(start, end):
+        # Extract the row.
+        row = arr[_n, :, :]
+
+        # Delta encode the row (horizontal predictor).
+        # np.diff computes diffs only -> doesn't contain the first element.
+        # Need to prepend the first element to turn it into a delta encoding.
+        diff = np.diff(row, axis=0)
+        delta = np.insert(diff, 0, row[0, :], axis=0)
+
+        e = lzw_encode(delta)
+        with mutex:
+            encoded[_n] = e
 
 class Draw:
     def __init__(self, color_model, load_size):
@@ -65,14 +83,10 @@ class Draw:
         #print('  saving result to <%s>\n' % save_path)
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-        
-        #
-        # The below is basically ripped from 'TIFF.write_image', but extended to include horizontal prediction.
-        #
-        arr = np.ascontiguousarray(self.result)
-        shape = arr.shape
-        bits = arr.itemsize * 8
-        
+
+        arr = self.result
+        shape = self.result.shape
+
         if arr.dtype in np.sctypes['float']:
             sample_format = tiff_h.SAMPLEFORMAT_IEEEFP
         elif arr.dtype in np.sctypes['uint'] + [bool]:
@@ -83,63 +97,8 @@ class Draw:
             sample_format = tiff_h.SAMPLEFORMAT_COMPLEXIEEEFP
         else:
             raise NotImplementedError(repr(arr.dtype))
-        
-        tif = TIFF.open(os.path.join(save_path, 'ours_fullres.tif'), mode='w')
-        tif.SetField(tiff_h.TIFFTAG_COMPRESSION, tiff_h.COMPRESSION_LZW)
-        tif.SetField(tiff_h.TIFFTAG_BITSPERSAMPLE, bits)
-        tif.SetField(tiff_h.TIFFTAG_SAMPLEFORMAT, sample_format)
-        tif.SetField(tiff_h.TIFFTAG_ORIENTATION, tiff_h.ORIENTATION_TOPLEFT)
-        
-        # Guess the planar config, with preference for separate planes
-        if shape[2] == 3 or shape[2] == 4:
-            planar_config = tiff_h.PLANARCONFIG_CONTIG
-            height, width, depth = shape
-            size = width * depth * arr.itemsize
-        else:
-            planar_config = tiff_h.PLANARCONFIG_SEPARATE
-            depth, height, width = shape
-            size = width * height * arr.itemsize
 
-        tif.SetField(tiff_h.TIFFTAG_PHOTOMETRIC, tiff_h.PHOTOMETRIC_RGB)
-        tif.SetField(tiff_h.TIFFTAG_IMAGEWIDTH, width)
-        tif.SetField(tiff_h.TIFFTAG_IMAGELENGTH, height)
-        tif.SetField(tiff_h.TIFFTAG_SAMPLESPERPIXEL, depth)
-        tif.SetField(tiff_h.TIFFTAG_PLANARCONFIG, planar_config)
-        if depth == 4:  # RGBA
-            tif.SetField(tiff_h.TIFFTAG_EXTRASAMPLES,
-                          [tiff_h.EXTRASAMPLE_UNASSALPHA])
-        elif depth > 4:  # No idea...
-            tif.SetField(tiff_h.TIFFTAG_EXTRASAMPLES,
-                          [tiff_h.EXTRASAMPLE_UNSPECIFIED] * (depth - 3))
-
-        if planar_config == tiff_h.PLANARCONFIG_CONTIG:
-            # This field can only be set after compression and before
-            # writing data. Horizontal predictor often improves compression,
-            # but some rare readers might support LZW only without predictor.
-            tif.SetField(tiff_h.TIFFTAG_PREDICTOR, tiff_h.PREDICTOR_HORIZONTAL)
-        
-            tif.SetField(tiff_h.TIFFTAG_ROWSPERSTRIP, 1)
-            
-            from operator import sub
-            from itertools import starmap, islice
-        
-            for _n in range(height):
-                # Extract the row.
-                row = arr[_n, :, :]
-                
-                # Delta encode the row (horizontal predictor).
-                # np.diff computes diffs only -> doesn't contain the first element.
-                # Need to prepend the first element to turn it into a delta encoding.
-                diff = np.diff(row, axis=0)
-                delta = np.insert(diff, 0, row[0, :], axis=0)
-                
-                e = lzw_encode(delta)
-                tif.WriteRawStrip(_n, e.ctypes.data, e.nbytes)
-        else:
-            for _n in range(depth):
-                tif.WriteEncodedStrip(_n, arr[_n, :, :].ctypes.data, size)
-        tif.WriteDirectory()
-        tif.close()
+        fasttiff.write_image_contig(os.path.join(save_path, 'ours_fullres.tif'), arr, shape[1], shape[0], shape[2], arr.itemsize, sample_format)
 
 ############### SETUP ###############
 
