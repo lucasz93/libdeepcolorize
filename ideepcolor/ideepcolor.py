@@ -11,7 +11,7 @@ import fasttiff
 
 color_model = './models/pytorch/caffemodel.pth'
 rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_925m-E-056_N-02.tif'
-test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif'
+test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02-medium.tif'
 gpu_id = 0
 
 def tif_encode_main(start, end, arr, encoded, mutex):
@@ -101,6 +101,14 @@ class Draw:
         fasttiff.write_image_contig(os.path.join(save_path, 'ours_fullres.tif'), arr, shape[1], shape[0], shape[2], arr.itemsize, sample_format)
 
 ############### SETUP ###############
+
+g = fasttiff.read_image_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif')
+
+fasttiff.write_image_contig('test_ul.tif', g[0, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+fasttiff.write_image_contig('test_ur.tif', g[1, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+fasttiff.write_image_contig('test_ll.tif', g[2, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+fasttiff.write_image_contig('test_lr.tif', g[3, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+exit()
 
 print(f'Loading RGB {test_image}')
 start = time.perf_counter()

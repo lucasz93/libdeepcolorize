@@ -876,7 +876,21 @@ LZWPreEncode(TIFF* tif/*, uint16 s*/)
  */
 
 static void
-horDiff8(uint8* cp0, tmsize_t cc)
+horDiff1x8(uint8* cp0, tmsize_t cc)
+{
+	char* cp = (char*) cp0;
+
+	cc -= 1;
+	int x1;
+	int x2 = cp[0];
+	do {
+		x1 = cp[1]; cp[1] = x1-x2; x2 = x1;
+		cp++;
+	} while ((cc -= 1) > 0);
+}
+
+static void
+horDiff3x8(uint8* cp0, tmsize_t cc)
 {
 	char* cp = (char*) cp0;
 
@@ -894,7 +908,7 @@ horDiff8(uint8* cp0, tmsize_t cc)
 }
 
 static int
-LZWEncode(TIFF* tif, uint8* bp, tmsize_t cc/*, uint16 s*/)
+LZWEncode(TIFF* tif, uint8* bp, tmsize_t cc, int depth/*, uint16 s*/)
 {
 	register LZWCodecState *sp = EncoderState(tif);
 	register long fcode;
@@ -908,7 +922,9 @@ LZWEncode(TIFF* tif, uint8* bp, tmsize_t cc/*, uint16 s*/)
 	uint8* op;
 	uint8* limit;
 	
-	horDiff8(bp, cc);
+	if (depth == 1)	horDiff1x8(bp, cc);
+	else if (depth == 3) horDiff3x8(bp, cc);
+	else return 0;
 
 	//(void) s;
 	if (sp == NULL)
@@ -1231,7 +1247,7 @@ static PyObject *py_decode(PyObject *self, PyObject *args, PyObject *kwds)
   return result;
 }
 #endif
-size_t lzw_encode(uint8 *src, size_t len, uint8 *dst, size_t dst_sz)
+size_t lzw_encode(int depth, uint8 *src, size_t len, uint8 *dst, size_t dst_sz)
 {
 	TIFF tif;
 	LZWCodecState tif_data;
@@ -1250,7 +1266,7 @@ size_t lzw_encode(uint8 *src, size_t len, uint8 *dst, size_t dst_sz)
 
 	// encode
 	LZWPreEncode(&tif);
-	LZWEncode(&tif, src, len);
+	LZWEncode(&tif, src, len, depth);
 	LZWPostEncode(&tif);
 
 	// cleanup

@@ -8,7 +8,174 @@
 #include <pthread.h>
 #include <unistd.h>
 
-typedef unsigned char *pixel_t;
+typedef unsigned char comp_t;
+
+void shutup_libtiff(const char* module, const char* fmt, ...) {}
+
+/*
+================================================================================
+
+	THREADED FILE READING
+
+================================================================================
+*/
+
+typedef struct
+{
+	const char *path;
+	int id;
+	PyArrayObject *dst;
+	int cpu_count;
+	
+	int half_image_width, half_image_length;
+	int dst_row_sz;
+	int rows_per_strip;
+	int samples_per_pixel;
+} read_data_t;
+
+// Split the input into 4 quarters - assume that'll be small enough to fit into the GPU. 
+// All good since we're rocking at least 8GB VRAM per card.
+static void read_thread_main(read_data_t *r)
+{
+	size_t strip = 0;
+	size_t strip_count;
+	comp_t *buf = NULL;
+	
+	TIFF *tif = TIFFOpen(r->path, "rM");
+
+	buf = _TIFFmalloc(TIFFStripSize(tif));
+	strip_count = TIFFNumberOfStrips(tif);
+	
+	for (strip = r->id; strip < strip_count / 2; strip += r->cpu_count)
+	{
+		TIFFReadEncodedStrip(tif, strip, buf, (tsize_t) -1);
+		
+		char *ul = PyArray_GETPTR4(r->dst, 0, strip, 0, 0);
+		char *ur = PyArray_GETPTR4(r->dst, 1, strip, 0, 0);
+	
+		memcpy(ul, buf, r->dst_row_sz);
+		memcpy(ur, buf + r->dst_row_sz, r->dst_row_sz);
+	}
+	
+	for (; strip < strip_count; strip += r->cpu_count)
+	{
+		TIFFReadEncodedStrip(tif, strip, buf, (tsize_t) -1);
+		
+		char *ll = PyArray_GETPTR4(r->dst, 2, strip - r->half_image_length, 0, 0);
+		char *lr = PyArray_GETPTR4(r->dst, 3, strip - r->half_image_length, 0, 0);
+		
+		memcpy(ll, buf, r->dst_row_sz);
+		memcpy(lr, buf + r->dst_row_sz, r->dst_row_sz);
+	}
+
+	_TIFFfree(buf);
+	TIFFClose(tif);
+}
+
+static PyArrayObject *c_read_image_contig(const char *path)
+{
+	uint32 width, height;
+	int32 rows_per_strip;
+	int16 samples_per_pixel;
+	short s;
+
+	TIFF *tif = TIFFOpen(path, "rM");
+	
+	//
+	// Ensure this TIF is compatible.
+	//
+	TIFFGetField(tif, TIFFTAG_COMPRESSION, &s);
+	assert(s == COMPRESSION_LZW);
+	
+	TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &s);
+	assert(s == sizeof(comp_t) * 8);
+	
+	TIFFGetField(tif, TIFFTAG_SAMPLEFORMAT, &s);
+	assert(s == SAMPLEFORMAT_UINT);
+	
+	TIFFGetField(tif, TIFFTAG_ORIENTATION, &s);
+	assert(s == ORIENTATION_TOPLEFT);
+
+	TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &s);
+	assert(s == PHOTOMETRIC_RGB);
+	
+	TIFFGetField(tif, TIFFTAG_PLANARCONFIG, &s);
+	assert(s == PLANARCONFIG_CONTIG);
+	
+	TIFFGetField(tif, TIFFTAG_PREDICTOR, &s);
+	assert(s == PREDICTOR_HORIZONTAL);
+	
+	TIFFGetField(tif, TIFFTAG_ROWSPERSTRIP, &rows_per_strip);
+	assert(rows_per_strip == 1);
+	
+	TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &samples_per_pixel);
+	TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width);
+	TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height);
+	
+	//
+	// Allocate memory.
+	//
+	const npy_intp dims[4] = { 4, height / 2, width / 2, samples_per_pixel };
+	PyArrayObject *dst = PyArray_New(&PyArray_Type, 
+		4, dims,	// Dimensions
+		NPY_UINT8, 	// Data type
+		NULL, NULL, // Stride + data
+		0,
+		0, 
+		NULL);
+	
+	//
+	// Spawn the read threads.
+	//
+	const int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+	pthread_t *threads = alloca(sizeof(pthread_t) * cpu_count);
+	read_data_t *read_data = alloca(sizeof(read_data_t) * cpu_count);
+	for (int i = 0; i < cpu_count; i++)
+	{
+		read_data_t *r = read_data + i;
+		
+		r->path = path;
+		r->id = i;
+		r->dst = dst;
+		r->half_image_width = width / 2;
+		r->half_image_length = height / 2;
+		r->dst_row_sz = r->half_image_width * sizeof(comp_t) * samples_per_pixel;
+		r->cpu_count = cpu_count;
+		r->rows_per_strip = rows_per_strip;
+		r->samples_per_pixel = samples_per_pixel;
+		
+		pthread_create(threads + i, NULL, read_thread_main, r);
+	}
+	
+	//
+	// Wait for the threads.
+	//
+	for (int i = 0; i < cpu_count; i++)
+	{
+		pthread_join(threads[i], NULL);
+	}
+	
+	TIFFClose(tif);
+	return dst;
+}
+
+static PyObject* py_read_image_contig(PyObject *self, PyObject *args, PyObject *kwds) 
+{
+	char *path;
+
+	if (!PyArg_ParseTuple(args, "s", &path))
+		return NULL;
+	
+	return c_read_image_contig(path);
+}
+
+/*
+================================================================================
+
+	THREADED FILE WRITING
+
+================================================================================
+*/
 
 typedef struct
 {
@@ -22,11 +189,10 @@ typedef struct
 	size_t stride;
 	PyArrayObject *arr;
 	encoded_row_t *encoded;
+	int depth;
 } write_data_t;
 
-extern size_t lzw_encode(uint8 *src, size_t len, uint8 *dst, size_t dst_sz);
-
-static void write_thread(write_data_t *w)
+static void write_thread_main(write_data_t *w)
 {
 	for (int r = w->start; r < w->end; r++)
 	{
@@ -38,11 +204,14 @@ static void write_thread(write_data_t *w)
 		// This hack sucks, but seems to work in practice.
 		//
 		// Don't judge me - it's 1AM here and this fasttiff module is 2 days behind schedule.
-		pixel_t *src = (pixel_t *)PyArray_GETPTR3(w->arr, r, 0, 2);
+		comp_t *src = w->depth == 3
+			? (comp_t *)PyArray_GETPTR3(w->arr, r, 0, 2)
+			: (comp_t *)PyArray_GETPTR2(w->arr, r, 0);
 		
 		encoded_row_t *e = w->encoded + r;
-				
-		e->size = lzw_encode(src, w->stride, e->data, e->data_sz);
+		
+		extern size_t lzw_encode(int depth, uint8 *src, size_t len, uint8 *dst, size_t dst_sz);
+		e->size = lzw_encode(w->depth, src, w->stride, e->data, e->data_sz);
 	}
 }
 
@@ -52,12 +221,12 @@ static void write_thread(write_data_t *w)
 static int c_write_image_contig(const char *path, PyArrayObject *arr, int width, int height, int depth, int compsz, int sample_format)
 {
 	// Only support RGB8 right now.
-	if (depth != 3 && compsz != 1)
+	if (compsz != 1)
 	{
 		return 0;
 	}
 
-	TIFF *tif = TIFFOpen(path, "w");
+	TIFF *tif = TIFFOpen(path, "wM");
 	TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
 	TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, compsz * 8);
 	TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, sample_format);
@@ -92,7 +261,7 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
 	}
 	
 	// Allocate worker thread data.
-	write_data_t *write_data = malloc(sizeof(write_data_t) * cpu_count);
+	write_data_t *write_data = alloca(sizeof(write_data_t) * cpu_count);
 	
 	// Figure out how much work each thread is doing.
 	double current_row = 0.0;
@@ -108,8 +277,9 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
 		w->start = (int)(current_row);
 		w->end = (int)(current_row + rows_per_thread);
 		w->arr = arr;
+		w->depth = depth;
 	
-		pthread_create(threads + i, NULL, write_thread, w);
+		pthread_create(threads + i, NULL, write_thread_main, w);
 		
 		current_row += rows_per_thread;
 	}
@@ -134,7 +304,6 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
     
 	free(encoded);
 	free(encoded_buf);
-	free(write_data);
 	return 1;
 }
 
@@ -155,7 +324,17 @@ static PyObject* py_write_image_contig(PyObject *self, PyObject *args, PyObject 
 	return Py_BuildValue("i", c_write_image_contig(path, arr, width, height, depth, compsz, sample_format));
 }
 
+
+/*
+================================================================================
+
+	PYTHON STUFF
+
+================================================================================
+*/
+
 static PyMethodDef PyFastTiffMethods[] = {
+	{"read_image_contig", (PyCFunction)py_read_image_contig, METH_VARARGS|METH_KEYWORDS, "Reads the TIFF from the specified file into the given array."},
 	{"write_image_contig", (PyCFunction)py_write_image_contig, METH_VARARGS|METH_KEYWORDS, "Writes the TIFF to the specified file."},
 	{NULL}  /* Sentinel */
 };
@@ -170,6 +349,9 @@ static struct PyModuleDef moduledef = {
 
 PyMODINIT_FUNC PyInit_fasttiff() 
 {
+	TIFFSetErrorHandler(shutup_libtiff);
+	TIFFSetWarningHandler(shutup_libtiff);
+	
 	import_array();
 	if (PyErr_Occurred())
 	{
