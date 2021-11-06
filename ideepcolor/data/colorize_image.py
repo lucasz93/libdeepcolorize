@@ -49,19 +49,21 @@ class ColorizeImageBase():
 
     # ***** Image prepping *****
     def load_image(self, input_path):
-        # rgb image [CxXdxXd]
         tif = TIFF.open(input_path, mode='r')
         try:
-            im = cv2.cvtColor(tif.read_image(), cv2.COLOR_GRAY2RGB)
-            self.set_image(im)
+            self.set_image(tif.read_image())
         finally:
             tif.close()
 
+    # rgb image [XdxXdxC]
     def set_image(self, im):
+        # FIXME: This has lots of syscalls. Port this to the GPU.
+        im = cv2.cvtColor(im, cv2.COLOR_GRAY2RGB)
         gpu_im = cv2.cuda_GpuMat(im)
         self._set_img_lab_fullres_(im.shape, gpu_im)
 
         # convert into lab space
+        # TODO: port this to GPU as well...
         im = cv2.resize(im, (self.Xd, self.Xd))
         self._set_img_lab_(im)
 

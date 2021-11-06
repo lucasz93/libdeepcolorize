@@ -10,8 +10,8 @@ from data import colorize_image as CI
 import fasttiff
 
 color_model = './models/pytorch/caffemodel.pth'
-rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_925m-E-056_N-02.tif'
-test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02-medium.tif'
+rgb_image = './imgs/E-056_N-02/Mars_Viking_ClrMosaic_global_E-056_N-02.tif'
+test_image = './imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif'
 gpu_id = 0
 
 def tif_encode_main(start, end, arr, encoded, mutex):
@@ -41,12 +41,16 @@ class Draw:
 
     def add_point(self, point):
         self.points += [point]
-
-    def read_image(self, image_file):
+        
+    def load_image(self, image_file):
         self.image_loaded = True
         self.image_file = image_file
 
         self.model.load_image(image_file)
+
+    def set_image(self, image):
+        self.model.set_image(image)
+        self.image_loaded = True
 
     def get_input(self):
         h = self.load_size
@@ -61,7 +65,9 @@ class Draw:
 
     def compute_result(self, rgb):
         if rgb.shape[0] != self.load_size or rgb.shape[1] != self.load_size:
-            raise Exception('Input not expected size!')
+            raise Exception(f'Input not expected size - is {rgb.shape}, expected {(self.load_size, self.load_size, 3)}!')
+    
+        #fasttiff.write_image_contig('/home/mechsoft/Documents/rgb.tif', rgb, rgb.shape[1], rgb.shape[0], rgb.shape[2], rgb.itemsize, tiff_h.SAMPLEFORMAT_UINT)
 
         # RGB has all pixels filled.
         im_mask0 = np.ones((1, self.load_size, self.load_size))
@@ -73,17 +79,9 @@ class Draw:
     def render(self):
         self.result = self.model.get_img_fullres()[:, :, ::-1]
 
-    def save_result(self):
-        path = os.path.abspath(self.image_file)
-        path, ext = os.path.splitext(path)
-
-        save_path = "_".join([path, str(self.suffix)])
-        self.suffix += 1
-
-        #print('  saving result to <%s>\n' % save_path)
-        if not os.path.exists(save_path):
-            os.mkdir(save_path)
-
+    def save(self, filename):
+        filename = f'/home/mechsoft/Documents/{filename}'
+    
         arr = self.result
         shape = self.result.shape
 
@@ -98,71 +96,69 @@ class Draw:
         else:
             raise NotImplementedError(repr(arr.dtype))
 
-        fasttiff.write_image_contig(os.path.join(save_path, 'ours_fullres.tif'), arr, shape[1], shape[0], shape[2], arr.itemsize, sample_format)
+        fasttiff.write_image_contig(filename, arr, shape[1], shape[0], shape[2], arr.itemsize, sample_format)
 
-############### SETUP ###############
+#####################################
 
-print(f'Loading top half')
-start = time.perf_counter()
-g0 = fasttiff.read_two_quarters_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif', 0)
-print(f'Took {time.perf_counter() - start} seconds\n')
+print(f'Loading RGB...')
+rgb0 = fasttiff.read_two_quarters_contig(rgb_image, 0)
+rgb1 = fasttiff.read_two_quarters_contig(rgb_image, 1)
+load_size = rgb0.shape[1]
 
-print(f'Loading bottom half')
-start = time.perf_counter()
-g1 = fasttiff.read_two_quarters_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif', 1)
-print(f'Took {time.perf_counter() - start} seconds\n')
-
-#fasttiff.write_image_contig('test_ul.tif', g0[0, :, :, :], g0.shape[1], g0.shape[2], g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-#fasttiff.write_image_contig('test_ur.tif', g0[1, :, :, :], g0.shape[1], g0.shape[2], g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-#fasttiff.write_image_contig('test_ll.tif', g1[0, :, :, :], g1.shape[1], g1.shape[2], g1.shape[3], g1.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-#fasttiff.write_image_contig('test_lr.tif', g1[1, :, :, :], g1.shape[1], g1.shape[2], g1.shape[3], g1.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-
-print(f'Writing whole thing')
-start = time.perf_counter()
-fasttiff.stitch_and_write_quarters_contig('test.tif', g0, g1, g0.shape[1] * 2, g0.shape[2] * 2, g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-print(f'Took {time.perf_counter() - start} seconds\n')
-
-exit()
-
-print(f'Loading RGB {test_image}')
-start = time.perf_counter()
-tif = TIFF.open(rgb_image, mode='r')
-rgb = tif.read_image().astype('uint8')
-h, w, c = rgb.shape
-if w != h:
-    raise Exception('w != h')
-load_size = h
-print(f'Took {time.perf_counter() - start} seconds\n')
-
-print('Creating networks...')
+print(f'Creating networks on GPU {gpu_id} and buffer size {load_size}...')
 start = time.perf_counter()
 colorModel = CI.ColorizeImageTorch(gpu_id, Xd=load_size)
 colorModel.prep_net(path=color_model)
-print(f'Took {time.perf_counter() - start} seconds\n')
-
-print(f'Loading grayscale {test_image}')
-start = time.perf_counter()
 draw = Draw(colorModel, load_size)
-draw.read_image(test_image)
-print(f'Took {time.perf_counter() - start} seconds\n')
 
-print('Computing (cold)...')
-start = time.perf_counter()
-draw.compute_result(rgb)
-print(f'Took {time.perf_counter() - start} seconds\n')
+print(f'Loading grayscale...')
+g0 = fasttiff.read_two_quarters_contig(test_image, 0)
+g1 = fasttiff.read_two_quarters_contig(test_image, 1)
 
-print('Computing (warm)...')
-start = time.perf_counter()
-draw.compute_result(rgb)
-print(f'Took {time.perf_counter() - start} seconds\n')
+####################################
 
-print('Rendering...')
-start = time.perf_counter()
+print(f'Preprocessing UL...')
+draw.set_image(g0[0, :, :, :])
+
+print(f'Rendering UL...')
+draw.compute_result(rgb0[0, :, :, :])
 draw.render()
-print(f'Took {time.perf_counter() - start} seconds\n')
 
-print('Saving...')
-start = time.perf_counter()
-draw.save_result()
-print(f'Took {time.perf_counter() - start} seconds\n')
+print(f'Saving...')
+draw.save('ul.tif')
+
+#---------------
+print(f'Preprocessing UR...')
+draw.set_image(g0[1, :, :, :])
+
+print(f'Rendering UR...')
+draw.compute_result(rgb0[1, :, :, :])
+draw.render()
+
+print(f'Saving...')
+draw.save('ur.tif')
+
+#---------------
+print(f'Preprocessing LL...')
+draw.set_image(g1[0, :, :, :])
+
+print(f'Rendering LL...')
+draw.compute_result(rgb1[0, :, :, :])
+draw.render()
+
+print(f'Saving...')
+draw.save('ll.tif')
+
+#---------------
+print(f'Preprocessing LR...')
+draw.set_image(g1[1, :, :, :])
+
+print(f'Rendering LR...')
+draw.compute_result(rgb1[1, :, :, :])
+draw.render()
+
+print(f'Saving...')
+draw.save('lr.tif')
+
+#---------------
 
