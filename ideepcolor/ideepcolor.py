@@ -102,12 +102,26 @@ class Draw:
 
 ############### SETUP ###############
 
-g = fasttiff.read_image_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif')
+print(f'Loading top half')
+start = time.perf_counter()
+g0 = fasttiff.read_two_quarters_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif', 0)
+print(f'Took {time.perf_counter() - start} seconds\n')
 
-fasttiff.write_image_contig('test_ul.tif', g[0, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-fasttiff.write_image_contig('test_ur.tif', g[1, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-fasttiff.write_image_contig('test_ll.tif', g[2, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
-fasttiff.write_image_contig('test_lr.tif', g[3, :, :, :], g.shape[1], g.shape[2], g.shape[3], g.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+print(f'Loading bottom half')
+start = time.perf_counter()
+g1 = fasttiff.read_two_quarters_contig('./imgs/E-056_N-02/Murray-Lab_CTX-Mosaic_beta01_E-056_N-02.tif', 1)
+print(f'Took {time.perf_counter() - start} seconds\n')
+
+#fasttiff.write_image_contig('test_ul.tif', g0[0, :, :, :], g0.shape[1], g0.shape[2], g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+#fasttiff.write_image_contig('test_ur.tif', g0[1, :, :, :], g0.shape[1], g0.shape[2], g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+#fasttiff.write_image_contig('test_ll.tif', g1[0, :, :, :], g1.shape[1], g1.shape[2], g1.shape[3], g1.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+#fasttiff.write_image_contig('test_lr.tif', g1[1, :, :, :], g1.shape[1], g1.shape[2], g1.shape[3], g1.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+
+print(f'Writing whole thing')
+start = time.perf_counter()
+fasttiff.stitch_and_write_quarters_contig('test.tif', g0, g1, g0.shape[1] * 2, g0.shape[2] * 2, g0.shape[3], g0.itemsize, tiff_h.SAMPLEFORMAT_UINT)
+print(f'Took {time.perf_counter() - start} seconds\n')
+
 exit()
 
 print(f'Loading RGB {test_image}')
