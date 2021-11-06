@@ -8,6 +8,8 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+
 typedef unsigned char comp_t;
 
 void shutup_libtiff(const char* module, const char* fmt, ...) {}
@@ -23,14 +25,12 @@ void shutup_libtiff(const char* module, const char* fmt, ...) {}
 typedef struct
 {
 	const char *path;
-	int id;
 	PyArrayObject *dst;
-	int cpu_count;
+	
+	int start, end;
 	
 	int half_image_width, half_image_length;
 	int dst_row_sz;
-	int rows_per_strip;
-	int samples_per_pixel;
 } read_data_t;
 
 // Split the input into 4 quarters - assume that'll be small enough to fit into the GPU. 
@@ -38,34 +38,40 @@ typedef struct
 static void read_thread_main(read_data_t *r)
 {
 	size_t strip = 0;
-	size_t strip_count;
-	comp_t *buf = NULL;
 	
 	TIFF *tif = TIFFOpen(r->path, "rM");
 
-	buf = _TIFFmalloc(TIFFStripSize(tif));
-	strip_count = TIFFNumberOfStrips(tif);
+	comp_t * restrict buf = _TIFFmalloc(TIFFStripSize(tif));
+	const size_t strip_count = TIFFNumberOfStrips(tif);
+
+	const size_t u_offset = r->start * r->dst_row_sz;
+	const size_t l_offset = (r->start - r->half_image_length) * r->dst_row_sz;
+
+	char * restrict ul = PyArray_GETPTR4(r->dst, 0, 0, 0, 0) + u_offset;
+	char * restrict ur = PyArray_GETPTR4(r->dst, 1, 0, 0, 0) + u_offset;
+	char * restrict ll = PyArray_GETPTR4(r->dst, 2, 0, 0, 0) + l_offset;
+	char * restrict lr = PyArray_GETPTR4(r->dst, 3, 0, 0, 0) + l_offset;
 	
-	for (strip = r->id; strip < strip_count / 2; strip += r->cpu_count)
+	for (strip = r->start; strip < MIN(r->end, strip_count / 2); strip++)
 	{
 		TIFFReadEncodedStrip(tif, strip, buf, (tsize_t) -1);
-		
-		char *ul = PyArray_GETPTR4(r->dst, 0, strip, 0, 0);
-		char *ur = PyArray_GETPTR4(r->dst, 1, strip, 0, 0);
 	
 		memcpy(ul, buf, r->dst_row_sz);
 		memcpy(ur, buf + r->dst_row_sz, r->dst_row_sz);
+		
+		ul += r->dst_row_sz;
+		ur += r->dst_row_sz;
 	}
 	
-	for (; strip < strip_count; strip += r->cpu_count)
+	for (; strip < MIN(r->end, strip_count); strip++)
 	{
 		TIFFReadEncodedStrip(tif, strip, buf, (tsize_t) -1);
 		
-		char *ll = PyArray_GETPTR4(r->dst, 2, strip - r->half_image_length, 0, 0);
-		char *lr = PyArray_GETPTR4(r->dst, 3, strip - r->half_image_length, 0, 0);
-		
 		memcpy(ll, buf, r->dst_row_sz);
 		memcpy(lr, buf + r->dst_row_sz, r->dst_row_sz);
+		
+		ll += r->dst_row_sz;
+		lr += r->dst_row_sz;
 	}
 
 	_TIFFfree(buf);
@@ -123,26 +129,28 @@ static PyArrayObject *c_read_image_contig(const char *path)
 		0,
 		0, 
 		NULL);
-	
+
 	//
 	// Spawn the read threads.
 	//
 	const int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
 	pthread_t *threads = alloca(sizeof(pthread_t) * cpu_count);
+	double current_row = 0.0;
+	double rows_per_thread = (double)height / cpu_count;
 	read_data_t *read_data = alloca(sizeof(read_data_t) * cpu_count);
 	for (int i = 0; i < cpu_count; i++)
 	{
 		read_data_t *r = read_data + i;
 		
 		r->path = path;
-		r->id = i;
 		r->dst = dst;
 		r->half_image_width = width / 2;
 		r->half_image_length = height / 2;
 		r->dst_row_sz = r->half_image_width * sizeof(comp_t) * samples_per_pixel;
-		r->cpu_count = cpu_count;
-		r->rows_per_strip = rows_per_strip;
-		r->samples_per_pixel = samples_per_pixel;
+		
+		r->start = (int)current_row;
+		r->end = (int)(current_row + rows_per_thread);
+		current_row += rows_per_thread;
 		
 		pthread_create(threads + i, NULL, read_thread_main, r);
 	}
