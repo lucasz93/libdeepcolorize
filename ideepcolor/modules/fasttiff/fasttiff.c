@@ -214,22 +214,16 @@ static void write_thread_main(write_data_t *w)
 //
 // The below is basically ripped from 'PyLibTiff.TIFF.write_image', but extended to include horizontal prediction.
 //
-static int c_write_image_contig(const char *path, PyArrayObject *arr, int width, int height, int depth, int compsz, int sample_format)
+static int c_write_image_contig(const char *path, PyArrayObject *arr, int width, int height, int depth)
 {
-	// Only support RGB8 right now.
-	if (compsz != 1)
-	{
-		return 0;
-	}
-
 	TIFF *tif = TIFFOpen(path, "wM");
 	TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
-	TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, compsz * 8);
-	TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, sample_format);
+	TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, sizeof(comp_t) * 8);
+	TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
 	TIFFSetField(tif, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
 
 	const int planar_config = PLANARCONFIG_CONTIG;
-	const int size = width * depth * compsz;
+	const int size = width * depth * sizeof(comp_t);
 
 	TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
 	TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
@@ -308,9 +302,9 @@ static PyObject* py_write_image_contig(PyObject *self, PyObject *args, PyObject 
 {
 	char *path;
 	PyArrayObject* arr = NULL;
-	int width, height, depth, compsz, sample_format;
+	int width, height, depth;
 
-	if (!PyArg_ParseTuple(args, "sOiiiii", &path, &arr, &width, &height, &depth, &compsz, &sample_format))
+	if (!PyArg_ParseTuple(args, "sOiii", &path, &arr, &width, &height, &depth))
 		return NULL;
 	if (!PyArray_Check(arr))
 	{
@@ -318,7 +312,7 @@ static PyObject* py_write_image_contig(PyObject *self, PyObject *args, PyObject 
 		return NULL;
 	}
 	
-	return Py_BuildValue("i", c_write_image_contig(path, arr, width, height, depth, compsz, sample_format));
+	return Py_BuildValue("i", c_write_image_contig(path, arr, width, height, depth));
 }
 
 /*
@@ -329,7 +323,16 @@ static PyObject* py_write_image_contig(PyObject *self, PyObject *args, PyObject 
 ================================================================================
 */
 
-static void stitch_and_write_thread_main(write_data_t *w)
+typedef struct
+{
+	int start, end;
+	size_t stride;
+	PyArrayObject *left, *right;
+	encoded_row_t *encoded;
+	int image_height, depth;
+} stitch_write_data_t;
+
+static void stitch_and_write_thread_main(stitch_write_data_t *w)
 {
 	comp_t *left_src, *right_src;
 	char *buf = malloc(w->stride);
@@ -348,13 +351,13 @@ static void stitch_and_write_thread_main(write_data_t *w)
 		// Don't judge me - it's 1AM here and this fasttiff module is 2 days behind schedule.
 		if (w->depth == 3)
 		{
-			left_src  = (comp_t *)PyArray_GETPTR4(w->arr, 0, r, 0, 2);
-			right_src = (comp_t *)PyArray_GETPTR4(w->arr, 1, r, 0, 2);
+			left_src  = (comp_t *)PyArray_GETPTR3(w->left, r, 0, 2);
+			right_src = (comp_t *)PyArray_GETPTR3(w->right, r, 0, 2);
 		}
 		else
 		{
-			left_src  = (comp_t *)PyArray_GETPTR3(w->arr, 0, r, 0);
-			right_src = (comp_t *)PyArray_GETPTR3(w->arr, 1, r, 0);
+			left_src  = (comp_t *)PyArray_GETPTR2(w->left, r, 0);
+			right_src = (comp_t *)PyArray_GETPTR2(w->right, r, 0);
 		}
 		
 		memcpy(buf, left_src, half_stride);
@@ -372,22 +375,16 @@ static void stitch_and_write_thread_main(write_data_t *w)
 //
 // The below is basically ripped from 'PyLibTiff.TIFF.write_image', but extended to include horizontal prediction.
 //
-static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *row0, PyArrayObject *row1, int width, int height, int depth, int compsz, int sample_format)
+static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *ul, PyArrayObject *ur, PyArrayObject *ll, PyArrayObject *lr, int width, int height, int depth)
 {
-	// Only support RGB8 right now.
-	if (compsz != 1)
-	{
-		return 0;
-	}
-
 	TIFF *tif = TIFFOpen(path, "wM");
 	TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
-	TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, compsz * 8);
-	TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, sample_format);
+	TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, sizeof(comp_t) * 8);
+	TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
 	TIFFSetField(tif, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
 
 	const int planar_config = PLANARCONFIG_CONTIG;
-	const int size = width * depth * compsz;
+	const int size = width * depth * sizeof(comp_t);
 
 	TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
 	TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
@@ -415,8 +412,8 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 	}
 
 	// Allocate worker thread data.
-	write_data_t *write_data0 = alloca(sizeof(write_data_t) * cpu_count);
-	write_data_t *write_data1 = alloca(sizeof(write_data_t) * cpu_count);
+	stitch_write_data_t *write_data0 = alloca(sizeof(stitch_write_data_t) * cpu_count);
+	stitch_write_data_t *write_data1 = alloca(sizeof(stitch_write_data_t) * cpu_count);
 
 	// Figure out how much work each thread is doing.
 	double rows_per_thread = (double)(height / 2) / cpu_count;	// Remember: we're only encoding the top or bottom half of the image.
@@ -427,13 +424,14 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 	double current_row = 0.0;
 	for (int i = 0; i < cpu_count; i++)
 	{
-		write_data_t *w = write_data0 + i;
+		stitch_write_data_t *w = write_data0 + i;
 		
 		w->encoded = encoded;
 		w->stride = size;
 		w->start = (int)(current_row);
 		w->end = (int)(current_row + rows_per_thread);
-		w->arr = row0;
+		w->left = ul;
+		w->right = ur;
 		w->depth = depth;
 	
 		pthread_create(threads + i, NULL, stitch_and_write_thread_main, w);
@@ -455,13 +453,14 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 	current_row = 0.0;
 	for (int i = 0; i < cpu_count; i++)
 	{
-		write_data_t *w = write_data1 + i;
+		stitch_write_data_t *w = write_data1 + i;
 
 		w->encoded = encoded + (height / 2);
 		w->stride = size;
 		w->start = (int)(current_row);
 		w->end = (int)(current_row + rows_per_thread);
-		w->arr = row1;
+		w->left = ll;
+		w->right = lr;
 		w->depth = depth;
 
 		pthread_create(threads + i, NULL, stitch_and_write_thread_main, w);
@@ -474,7 +473,7 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 	//
 	for (int i = 0; i < cpu_count; i++)
 	{
-		const write_data_t *w = write_data0 + i;
+		const stitch_write_data_t *w = write_data0 + i;
 		for (int r = w->start; r < w->end; r++)
 		{
 			encoded_row_t *e = w->encoded + r;
@@ -490,7 +489,7 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 		pthread_join(threads[i], NULL);
 		
 		// Write as the work completes.
-		const write_data_t *w = write_data1 + i;
+		const stitch_write_data_t *w = write_data1 + i;
 		for (int r = w->start; r < w->end; r++)
 		{
 			encoded_row_t *e = w->encoded + r;
@@ -510,18 +509,18 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *r
 static PyObject* py_stitch_and_write_quarters_contig(PyObject *self, PyObject *args, PyObject *kwds) 
 {
 	char *path;
-	PyArrayObject* arr0, *arr1;
-	int width, height, depth, compsz, sample_format;
+	PyArrayObject* ul, *ur, *ll, *lr;
+	int width, height, depth;
 
-	if (!PyArg_ParseTuple(args, "sOOiiiii", &path, &arr0, &arr1, &width, &height, &depth, &compsz, &sample_format))
+	if (!PyArg_ParseTuple(args, "sOOOOiii", &path, &ul, &ur, &ll, &lr, &width, &height, &depth))
 		return NULL;
-	if (!PyArray_Check(arr0) || !PyArray_Check(arr1))
+	if (!PyArray_Check(ul) || !PyArray_Check(ur) || !PyArray_Check(ll) || !PyArray_Check(lr))
 	{
-		PyErr_SetString(PyExc_TypeError, "second|third argument must be array object");
+		PyErr_SetString(PyExc_TypeError, "const char *path, PyArrayObject *ul, PyArrayObject *ur, PyArrayObject *ll, PyArrayObject *lr, int width, int height, int depth");
 		return NULL;
 	}
 	
-	return Py_BuildValue("i", c_stitch_and_write_quarters_contig(path, arr0, arr1, width, height, depth, compsz, sample_format));
+	return Py_BuildValue("i", c_stitch_and_write_quarters_contig(path, ul, ur, ll, lr, width, height, depth));
 }
 
 /*

@@ -57,15 +57,14 @@ class ColorizeImageBase():
 
     # rgb image [XdxXdxC]
     def set_image(self, im):
-        # FIXME: This has lots of syscalls. Port this to the GPU.
-        im = cv2.cvtColor(im, cv2.COLOR_GRAY2RGB)
-        gpu_im = cv2.cuda_GpuMat(im)
-        self._set_img_lab_fullres_(im.shape, gpu_im)
+        gpu_ggg = cv2.cuda_GpuMat(im.shape[0], im.shape[1], cv2.CV_8UC3)
+        cv2.cuda.cvtColor(cv2.cuda_GpuMat(im), cv2.COLOR_GRAY2RGB, gpu_ggg)
+        self._set_img_lab_fullres_(im.shape, gpu_ggg)
 
         # convert into lab space
-        # TODO: port this to GPU as well...
-        im = cv2.resize(im, (self.Xd, self.Xd))
-        self._set_img_lab_(im)
+        gpu_ggg_Xd = cv2.cuda_GpuMat(self.Xd, self.Xd, cv2.CV_8UC3)
+        cv2.cuda.resize(gpu_ggg, (self.Xd, self.Xd), gpu_ggg_Xd, interpolation=cv2.INTER_CUBIC)
+        self._set_img_lab_(gpu_ggg_Xd.download())
 
     def net_forward(self, input_ab, input_mask):
         # INPUTS
@@ -113,7 +112,7 @@ class ColorizeImageBase():
 
         # Convert to RGB.
         cv2.cuda.cvtColor(scratch, cv2.COLOR_LAB2RGB, scratch)
-
+        
         # Scale into [0..255].
         gpu_byte_rgb = cv2.cuda_GpuMat(full_shape[0], full_shape[1], cv2.CV_8UC3)
         scratch.convertTo(gpu_byte_rgb.type(), 255., gpu_byte_rgb)
@@ -184,6 +183,7 @@ class ColorizeImageTorch(ColorizeImageBase):
             return -1
 
         self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
+
         return 0
 
 

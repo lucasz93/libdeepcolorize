@@ -85,18 +85,7 @@ class Draw:
         arr = self.result
         shape = self.result.shape
 
-        if arr.dtype in np.sctypes['float']:
-            sample_format = tiff_h.SAMPLEFORMAT_IEEEFP
-        elif arr.dtype in np.sctypes['uint'] + [bool]:
-            sample_format = tiff_h.SAMPLEFORMAT_UINT
-        elif arr.dtype in np.sctypes['int']:
-            sample_format = tiff_h.SAMPLEFORMAT_INT
-        elif arr.dtype in np.sctypes['complex']:
-            sample_format = tiff_h.SAMPLEFORMAT_COMPLEXIEEEFP
-        else:
-            raise NotImplementedError(repr(arr.dtype))
-
-        fasttiff.write_image_contig(filename, arr, shape[1], shape[0], shape[2], arr.itemsize, sample_format)
+        fasttiff.write_image_contig(filename, arr, shape[1], shape[0], shape[2])
 
 #####################################
 
@@ -116,49 +105,34 @@ g0 = fasttiff.read_two_quarters_contig(test_image, 0)
 g1 = fasttiff.read_two_quarters_contig(test_image, 1)
 
 ####################################
+#print('TIME START...')
+start = time.perf_counter()
 
 print(f'Preprocessing UL...')
 draw.set_image(g0[0, :, :, :])
-
-print(f'Rendering UL...')
 draw.compute_result(rgb0[0, :, :, :])
 draw.render()
-
-print(f'Saving...')
-draw.save('ul.tif')
-
+ul = draw.result
 #---------------
 print(f'Preprocessing UR...')
 draw.set_image(g0[1, :, :, :])
-
-print(f'Rendering UR...')
 draw.compute_result(rgb0[1, :, :, :])
 draw.render()
-
-print(f'Saving...')
-draw.save('ur.tif')
-
+ur = draw.result
 #---------------
 print(f'Preprocessing LL...')
 draw.set_image(g1[0, :, :, :])
-
-print(f'Rendering LL...')
 draw.compute_result(rgb1[0, :, :, :])
 draw.render()
-
-print(f'Saving...')
-draw.save('ll.tif')
-
+ll = draw.result
 #---------------
 print(f'Preprocessing LR...')
 draw.set_image(g1[1, :, :, :])
-
-print(f'Rendering LR...')
 draw.compute_result(rgb1[1, :, :, :])
 draw.render()
-
-print(f'Saving...')
-draw.save('lr.tif')
-
+lr = draw.result
 #---------------
 
+fasttiff.stitch_and_write_quarters_contig('/home/mechsoft/Documents/colorized.tif', ul, ur, ll, lr, g0.shape[2] * 2, g0.shape[1] * 2, 3)
+
+print(f'Main took {time.perf_counter() - start} seconds\n')
