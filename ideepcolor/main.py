@@ -77,28 +77,18 @@ def colorize_main(key, gray_path, rgb_path, gpu_id):
 
 # Adapted from https://stackoverflow.com/a/24542445	
 def predict_remaining_time(times, remaining_items):
-	intervals = (
-	    (' weeks, ', 604800),  # 60 * 60 * 24 * 7
-	    (' days, ', 86400),    # 60 * 60 * 24
-	    (':', 3600),    # 60 * 60
-	    (':', 60),
-	    ('', 1),
-	)
+	intervals = (3600, 60, 1)
 	
 	seconds = int(sum(times) / len(times)) * remaining_items
 	result = []
 
-	for name, count in intervals:
+	for count in intervals:
 		value = seconds // count
 		if value:
 			seconds -= value * count
-		if value == 1:
-			name = name.rstrip('s')
-			
-		if value > 0:
-			result.append("{}{}".format(value, name))
+		result.append(f'{value:02}')
 		
-	return ''.join(result)
+	return ':'.join(result)
 
 #
 # Colorise all the things.
@@ -109,7 +99,7 @@ for key in sorted(grayscale_files.keys()):
 	gray_path = grayscale_files[key]
 	rgb_path = rgb_files[key]
 	
-	print(f'{i}/{len(grayscale_files)}: {key}... ', end='')
+	print(f'[{i}/{len(grayscale_files)}] {key}... ', end='')
 	
 	start = time.perf_counter()
 	

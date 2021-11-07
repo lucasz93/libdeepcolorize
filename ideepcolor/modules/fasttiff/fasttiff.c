@@ -39,11 +39,28 @@ typedef struct
 // All good since we're rocking at least 8GB VRAM per card.
 static void read_thread_main(read_data_t *r)
 {
-	TIFF *tif = TIFFOpen(r->path, "rM");
+	TIFF *tif = NULL;
+	
+	// Sometimes, TIFFOpen will fail with the error:
+	//	Not a TIFF or MDI file, bad magic number 0 (0x0).
+	//
+	// The file is fine and a retry loop seems to fix it.
+	for (int i = 0; i < 3; i++)
+	{		
+		tif = TIFFOpen(r->path, "rM");
+		if (tif)
+			break;
+	}
+	if (!tif)
+	{
+		printf("Failed to open file...hopefully got good error output.\n");
+		printf("- %s\n", r->path);
+		exit(0);
+	}
 
 	comp_t * restrict buf = _TIFFmalloc(TIFFStripSize(tif));
 	const size_t strip_count = TIFFNumberOfStrips(tif);
-
+	
 	const size_t offset = r->start * r->dst_row_sz;
 	char * restrict left_quarter = PyArray_GETPTR4(r->dst, 0, 0, 0, 0) + offset;
 	char * restrict right_quarter = PyArray_GETPTR4(r->dst, 1, 0, 0, 0) + offset;
@@ -231,7 +248,7 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
 	TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, depth);
 	TIFFSetField(tif, TIFFTAG_PLANARCONFIG, planar_config);
 
-    // This field can only be set after compression and before
+	// This field can only be set after compression and before
 	// writing data. Horizontal predictor often improves compression,
 	// but some rare readers might support LZW only without predictor.
 	TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
@@ -290,8 +307,8 @@ static int c_write_image_contig(const char *path, PyArrayObject *arr, int width,
 	}
 
 	// Cleanup.
-    TIFFWriteDirectory(tif);
-    TIFFClose(tif);
+	TIFFWriteDirectory(tif);
+	TIFFClose(tif);
     
 	free(encoded);
 	free(encoded_buf);
@@ -392,7 +409,7 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *u
 	TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, depth);
 	TIFFSetField(tif, TIFFTAG_PLANARCONFIG, planar_config);
 
-    // This field can only be set after compression and before
+	// This field can only be set after compression and before
 	// writing data. Horizontal predictor often improves compression,
 	// but some rare readers might support LZW only without predictor.
 	TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
@@ -498,8 +515,8 @@ static int c_stitch_and_write_quarters_contig(const char *path, PyArrayObject *u
 	}
 
 	// Cleanup.
-    TIFFWriteDirectory(tif);
-    TIFFClose(tif);
+	TIFFWriteDirectory(tif);
+	TIFFClose(tif);
     
 	free(encoded);
 	free(encoded_buf);
@@ -548,7 +565,7 @@ static struct PyModuleDef moduledef = {
 
 PyMODINIT_FUNC PyInit_fasttiff() 
 {
-	TIFFSetErrorHandler(shutup_libtiff);
+//	TIFFSetErrorHandler(shutup_libtiff);
 	TIFFSetWarningHandler(shutup_libtiff);
 	
 	import_array();
