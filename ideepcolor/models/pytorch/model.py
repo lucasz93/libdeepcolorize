@@ -3,12 +3,20 @@ import torch.nn as nn
 
 
 class SIGGRAPHGenerator(nn.Module):
-    def __init__(self, gpu_id, dist=False):
+    def __init__(self, gpu_id, Xd, maskcent, dist=False):
         super(SIGGRAPHGenerator, self).__init__()
         self.dist = dist
         self.gpu_id = gpu_id
         use_bias = True
         norm_layer = nn.BatchNorm2d
+        
+        mask = np.ones((1, self.Xd, self.Xd))
+        
+        if self.gpu_id == None:
+            self.mask_B = torch.Tensor(mask)[None, :, :, :]
+            self.mask_B = self.mask_B - maskcent
+        else:
+            self.mask_B = torch.Tensor(mask).cuda(self.gpu_id)[None, :, :, :]
 
         # Conv1
         model1 = [nn.Conv2d(4, 64, kernel_size=3, stride=1, padding=1, bias=use_bias), ]
@@ -132,7 +140,7 @@ class SIGGRAPHGenerator(nn.Module):
         self.upsample4 = nn.Sequential(*[nn.Upsample(scale_factor=4, mode='nearest'), ])
         self.softmax = nn.Sequential(*[nn.Softmax(dim=1), ])
 
-    def forward(self, input_A, input_B, mask_B, maskcent=0):
+    def forward(self, input_A, input_B):
         # input_A \in [-50,+50]
         # input_B \in [-110, +110]
         # mask_B \in [0, +1.0]
@@ -140,14 +148,11 @@ class SIGGRAPHGenerator(nn.Module):
         if self.gpu_id == None:
             input_A = torch.Tensor(input_A)[None, :, :, :]
             input_B = torch.Tensor(input_B)[None, :, :, :]
-            mask_B = torch.Tensor(mask_B)[None, :, :, :]
-            mask_B = mask_B - maskcent
         else:
             input_A = torch.Tensor(input_A).cuda(self.gpu_id)[None, :, :, :]
             input_B = torch.Tensor(input_B).cuda(self.gpu_id)[None, :, :, :]
-            mask_B = torch.Tensor(mask_B).cuda(self.gpu_id)[None, :, :, :]
 
-        conv1_2 = self.model1(torch.cat((input_A / 100., input_B / 110., mask_B), dim=1))
+        conv1_2 = self.model1(torch.cat((input_A / 100., input_B / 110., self.mask_B), dim=1))
         conv2_2 = self.model2(conv1_2[:, :, ::2, ::2])
         conv3_3 = self.model3(conv2_2[:, :, ::2, ::2])
         conv4_3 = self.model4(conv3_3[:, :, ::2, ::2])

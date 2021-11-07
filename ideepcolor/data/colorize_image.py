@@ -1,10 +1,8 @@
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 import os, time
 import torch
 from libtiff import TIFF
-from scipy.ndimage.interpolation import zoom
 
 def rgb2lab_transpose(img_rgb):
     ''' INPUTS
@@ -37,7 +35,7 @@ def cuda_rgb2l(shape, gpu_img_rgb):
 
 
 class ColorizeImageBase():
-    def __init__(self, Xd=256):
+    def __init__(self, Xd):
         self.Xd = Xd
         self.img_l_set = False
         self.net_set = False
@@ -66,10 +64,9 @@ class ColorizeImageBase():
         cv2.cuda.resize(gpu_ggg, (self.Xd, self.Xd), gpu_ggg_Xd, interpolation=cv2.INTER_CUBIC)
         self._set_img_lab_(gpu_ggg_Xd.download())
 
-    def net_forward(self, input_ab, input_mask):
+    def net_forward(self, input_ab):
         # INPUTS
         #     ab       2xXxX    input color patches (non-normalized)
-        #     mask     1xXxX    input mask, indicating which points have been provided
         # assumes self.img_l_mc has been set
 
         if(not self.img_l_set):
@@ -80,7 +77,6 @@ class ColorizeImageBase():
             return -1
 
         self.input_ab_mc = (input_ab - self.ab_mean) / self.ab_norm
-        self.input_mask_mult = input_mask * self.mask_mult
         return 0
 
     def get_img_fullres(self):
@@ -139,7 +135,7 @@ class ColorizeImageBase():
 
 
 class ColorizeImageTorch(ColorizeImageBase):
-    def __init__(self, gpu_id, Xd=256, maskcent=False):
+    def __init__(self, gpu_id, Xd, maskcent=False):
         print('ColorizeImageTorch instantiated')
         ColorizeImageBase.__init__(self, Xd)
         self.gpu_id = gpu_id
@@ -157,7 +153,7 @@ class ColorizeImageTorch(ColorizeImageBase):
     def prep_net(self, path='', dist=False):
         import torch
         import models.pytorch.model as model
-        self.net = model.SIGGRAPHGenerator(self.gpu_id, dist)
+        self.net = model.SIGGRAPHGenerator(self.gpu_id, self.Xd, self.mask_cent, dist)
         state_dict = torch.load(path)
         if hasattr(state_dict, '_metadata'):
             del state_dict._metadata
@@ -182,7 +178,7 @@ class ColorizeImageTorch(ColorizeImageBase):
         if ColorizeImageBase.net_forward(self, input_ab, input_mask) == -1:
             return -1
 
-        self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc, self.input_mask_mult, self.mask_cent)[0, :, :, :].cpu().data.numpy()
+        self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc)[0, :, :, :].cpu().data.numpy()
 
         return 0
 
