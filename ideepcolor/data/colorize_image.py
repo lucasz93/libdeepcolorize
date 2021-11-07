@@ -136,7 +136,6 @@ class ColorizeImageBase():
 
 class ColorizeImageTorch(ColorizeImageBase):
     def __init__(self, gpu_id, Xd, maskcent=False):
-        print('ColorizeImageTorch instantiated')
         ColorizeImageBase.__init__(self, Xd)
         self.gpu_id = gpu_id
         self.l_norm = 1.
@@ -160,22 +159,19 @@ class ColorizeImageTorch(ColorizeImageBase):
 
         self.net.load_state_dict(state_dict)
         if self.gpu_id != None:
-            print(f'Running on CUDA:{self.gpu_id}')
             self.net.cuda(self.gpu_id)
-        else:
-            print('Running on CPU')
 
         self.net.eval()
         self.net_set = True
 
     # ***** Call forward *****
-    def net_forward(self, input_ab, input_mask):
+    def net_forward(self, input_ab):
         # INPUTS
         #     ab       2xXxX    input color patches (non-normalized)
         #     mask     1xXxX    input mask, indicating which points have been provided
         # assumes self.img_l_mc has been set
 
-        if ColorizeImageBase.net_forward(self, input_ab, input_mask) == -1:
+        if ColorizeImageBase.net_forward(self, input_ab) == -1:
             return -1
 
         self.output_ab = self.net.forward(self.img_l_mc, self.input_ab_mc)[0, :, :, :].cpu().data.numpy()

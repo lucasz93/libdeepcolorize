@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -10,7 +11,7 @@ class SIGGRAPHGenerator(nn.Module):
         use_bias = True
         norm_layer = nn.BatchNorm2d
         
-        mask = np.ones((1, self.Xd, self.Xd))
+        mask = np.ones((1, Xd, Xd))
         
         if self.gpu_id == None:
             self.mask_B = torch.Tensor(mask)[None, :, :, :]
